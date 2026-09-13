@@ -1,0 +1,22 @@
+# Portainer-friendly compose: no required .env file.
+# Override any variable in Portainer → Stack → Environment variables.
+#
+# GPU / ComfyUI stays in the separate ROCm stack (local_video docker-compose.comfyui.yml).
+# Point COMFYUI_BASE_URL at that host (default http://192.168.10.31:8188).
+
+services:
+  api:
+    build: .
+    image: mediagen:latest
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    environment:
+      CACHE_DIR: ${CACHE_DIR:-/cache}
+      CACHE_MAX_ITEMS: ${CACHE_MAX_ITEMS:-1000}
+      COMFYUI_BASE_URL: ${COMFYUI_BASE_URL:-http://192.168.10.31:8188}
+      WORKFLOWS_DIR: /app/workflows
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+    volumes:
+      # Host cache directory — override CACHE_HOST_DIR in Portainer if needed.
+      - ${CACHE_HOST_DIR:-/shared/mediagen/cache}:/cache

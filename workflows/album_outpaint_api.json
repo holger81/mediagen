@@ -1,0 +1,112 @@
+{
+  "_meta": {
+    "title": "Album art outpaint (Flux fill)",
+    "notes": "API export of the household Flux fill outpaint graph on 192.168.10.31. Requires flux1-fill-dev.safetensors, DualCLIP (clip_l + t5xxl_fp16), and ae.safetensors. The app rewrites LoadImage (17) after upload and injects the positive CLIP prompt (23). ImagePadForOutpaint pads (256/128/256/128) must stay in sync with ComfyUiOutpaintClient.OUTPAINT_PAD_* so the sharp cover can hover over the original region. Measured on real covers: feathering 0 gives the smallest boundary jump (3 vs 20 at feathering 24) because the mask never reaches into the cover."
+  },
+  "3": {
+    "inputs": {
+      "seed": 0,
+      "steps": 28,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "denoise": 1.0,
+      "model": ["39", 0],
+      "positive": ["38", 0],
+      "negative": ["38", 1],
+      "latent_image": ["38", 2]
+    },
+    "class_type": "KSampler"
+  },
+  "8": {
+    "inputs": {
+      "samples": ["3", 0],
+      "vae": ["32", 0]
+    },
+    "class_type": "VAEDecode"
+  },
+  "9": {
+    "inputs": {
+      "filename_prefix": "ha_album_outpaint",
+      "images": ["8", 0]
+    },
+    "class_type": "SaveImage"
+  },
+  "17": {
+    "inputs": {
+      "image": "PLACEHOLDER_COVER.png"
+    },
+    "class_type": "LoadImage"
+  },
+  "23": {
+    "inputs": {
+      "text": "PLACEHOLDER_OUTPAINT_PROMPT",
+      "clip": ["34", 0]
+    },
+    "class_type": "CLIPTextEncode"
+  },
+  "26": {
+    "inputs": {
+      "guidance": 30.0,
+      "conditioning": ["23", 0]
+    },
+    "class_type": "FluxGuidance"
+  },
+  "31": {
+    "inputs": {
+      "unet_name": "flux1-fill-dev.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader"
+  },
+  "32": {
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    },
+    "class_type": "VAELoader"
+  },
+  "34": {
+    "inputs": {
+      "clip_name1": "clip_l.safetensors",
+      "clip_name2": "t5xxl_fp16.safetensors",
+      "type": "flux",
+      "device": "default"
+    },
+    "class_type": "DualCLIPLoader"
+  },
+  "38": {
+    "inputs": {
+      "noise_mask": false,
+      "positive": ["26", 0],
+      "negative": ["46", 0],
+      "vae": ["32", 0],
+      "pixels": ["44", 0],
+      "mask": ["44", 1]
+    },
+    "class_type": "InpaintModelConditioning"
+  },
+  "39": {
+    "inputs": {
+      "strength": 1.0,
+      "model": ["31", 0]
+    },
+    "class_type": "DifferentialDiffusion"
+  },
+  "44": {
+    "inputs": {
+      "left": 256,
+      "top": 128,
+      "right": 256,
+      "bottom": 128,
+      "feathering": 0,
+      "image": ["17", 0]
+    },
+    "class_type": "ImagePadForOutpaint"
+  },
+  "46": {
+    "inputs": {
+      "conditioning": ["23", 0]
+    },
+    "class_type": "ConditioningZeroOut"
+  }
+}

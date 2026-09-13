@@ -1,0 +1,25 @@
+"""Portainer-friendly settings (env overrides, no required .env file)."""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=None, extra="ignore")
+
+    cache_dir: Path = Path("/cache")
+    cache_max_items: int = 1000
+    comfyui_base_url: str = "http://192.168.10.31:8188"
+    workflows_dir: Path = Path("/app/workflows")
+    outpaint_poll_interval_s: float = 1.5
+    outpaint_poll_timeout_s: float = 90.0
+    cors_origins: str = "*"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
