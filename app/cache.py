@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import sqlite3
 import threading
 import time
@@ -10,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.constants import OUTPAINT_CACHE_VERSION
+from app.image_id import content_hash as image_content_hash
 
 
 @dataclass(frozen=True)
@@ -21,7 +21,7 @@ class CacheHit:
 
 
 class MediaCache:
-    """Disk JPEG cache keyed by sha256(version || source_bytes) with two-tier eviction."""
+    """Disk JPEG cache keyed by canonical image identity with two-tier eviction."""
 
     def __init__(
         self,
@@ -69,16 +69,25 @@ class MediaCache:
 
     @staticmethod
     def content_hash(source_bytes: bytes, cache_version: str = OUTPAINT_CACHE_VERSION) -> str:
-        digest = hashlib.sha256()
-        digest.update(cache_version.encode("utf-8"))
-        digest.update(source_bytes)
-        return digest.hexdigest()
+        return image_content_hash(source_bytes, cache_version)
 
     def hash_for(self, source_bytes: bytes) -> str:
         return self.content_hash(source_bytes, self.cache_version)
 
     def file_for(self, content_hash: str) -> Path:
         return self.cache_dir / f"{content_hash}.jpg"
+
+    def done_marker_for(self, content_hash: str) -> Path:
+        return self.cache_dir / f"{content_hash}.done"
+
+    def mark_done(self, content_hash: str) -> None:
+        """Mark a generation attempt finished (Flux or local fallback)."""
+        with self._lock:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            self.done_marker_for(content_hash).touch()
+
+    def is_done(self, content_hash: str) -> bool:
+        return self.done_marker_for(content_hash).is_file()
 
     def get(self, source_bytes: bytes, *, touch: bool = True) -> CacheHit | None:
         content_hash = self.hash_for(source_bytes)
@@ -187,7 +196,7 @@ class MediaCache:
             return CacheHit(hash=content_hash, path=path, source=source, hits=hits)
 
     def invalidate(self, content_hash: str) -> bool:
-        """Remove a cache entry and its flux marker. Returns True if a file was removed."""
+        """Remove a cache entry and markers. Returns True if a file was removed."""
         path = self.file_for(content_hash)
         with self._lock:
             with self._connect() as conn:
@@ -195,6 +204,7 @@ class MediaCache:
             removed = path.is_file()
             path.unlink(missing_ok=True)
             (self.cache_dir / f"{content_hash}.flux").unlink(missing_ok=True)
+            self.done_marker_for(content_hash).unlink(missing_ok=True)
             return removed
 
     def count(self) -> int:
@@ -231,5 +241,5 @@ class MediaCache:
             conn.execute("DELETE FROM entries WHERE hash = ?", (victim_hash,))
             path = self.file_for(victim_hash)
             path.unlink(missing_ok=True)
-            flux_marker = self.cache_dir / f"{victim_hash}.flux"
-            flux_marker.unlink(missing_ok=True)
+            (self.cache_dir / f"{victim_hash}.flux").unlink(missing_ok=True)
+            self.done_marker_for(victim_hash).unlink(missing_ok=True)

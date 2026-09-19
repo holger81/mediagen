@@ -456,7 +456,9 @@ def accept_flux_pad(
     if pad.size != expected:
         # Wrong geometry — seam metrics would be meaningless.
         return None
-    if not should_reject_flux_pad(padded_bytes, source_bytes, pad_left, pad_top, pad_right, pad_bottom):
+    if not should_reject_flux_pad(
+        padded_bytes, source_bytes, pad_left, pad_top, pad_right, pad_bottom
+    ):
         return padded_bytes
     feathered = feather_pad_seam(
         padded_bytes, pad_left, pad_top, pad_right, pad_bottom, radius=10

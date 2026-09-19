@@ -73,16 +73,15 @@ file /tmp/out.jpg
 
 ## Cache behavior
 
-- Key: `sha256(cache_version || source_bytes)` (`empty-prompt-feather10-v6`)
+- Key: decoded RGB fingerprint `sha256(version || WxH || pixels)` (PNG/BMP of the
+  same pixels share a key; raw garbage uploads fall back to byte hash)
+- After each generation attempt (Flux **or** local fallback), a `.done` marker is
+  written — pictorial local pads are **not** wiped and re-queued on every play
+  (this was regenerating Comfy jobs like `ha_album_outpaint_00367_` /
+  `00420_` for the same cover)
 - Files under `CACHE_DIR` as `{hash}.jpg` + SQLite hit index
 - Eviction: single-hit (probation) entries first; hot keys (`hits >= 2`) kept longer
 - Single-flight per hash: concurrent POSTs share one Comfy job and all get `202`
-- **Flux upgrade:** a cached `local` pad is final only for uniform/black mattes. A
-  pictorial cover that previously landed on local (Flux fail/reject) is dropped on
-  the next POST so Flux can run again — otherwise walls stay on soft enlarge forever.
-- **Flux upgrade:** a cached `local` pad is final only for uniform/black mattes. A
-  pictorial cover that previously landed on local (Flux fail/reject) is dropped on
-  the next POST so Flux can run again — otherwise walls stay on soft enlarge forever.
 
 ## Local development
 

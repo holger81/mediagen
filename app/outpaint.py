@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from app.cache import MediaCache
 from app.comfy_client import ComfyUiOutpaintClient
-from app.local_pad import has_uniform_edges, pad_from_edges, accept_flux_pad
+from app.local_pad import accept_flux_pad, has_uniform_edges, pad_from_edges
 
 logger = logging.getLogger(__name__)
 
@@ -60,32 +60,36 @@ class OutpaintService:
         task = self._inflight.get(content_hash)
         return task is not None and not task.done()
 
-    def _final_cache_hit(
+    def _settled_cache_hit(
         self,
         content_hash: str,
         source_bytes: bytes,
         *,
         touch: bool,
     ) -> OutpaintResult | None:
-        """Return a cache hit only when it is a finished result (Flux, or local matte).
+        """Return a finished cache entry — never re-queue the same cover forever.
 
-        Pictorial covers that only have a prior local pad (Flux fail/reject) must
-        not stick forever — drop the entry so the next submit can upgrade to Flux.
+        Flux results are always final. Local pads are final for uniform mattes,
+        and also final after a generation attempt (`.done` marker) so a rejected
+        or timed-out Flux does not restart on every playlist play.
         """
         hit = self._hit_result(content_hash, touch=touch)
         if hit is None:
             return None
         if hit.source == "flux":
             return hit
-        # Local is the finished state only for uniform / black-frame covers.
         if has_uniform_edges(source_bytes):
             return hit
+        if self.cache.is_done(content_hash):
+            return hit
+        # Legacy pictorial local without `.done`: keep it (do not wipe). One
+        # Comfy attempt already happened when it was written.
         logger.info(
-            "Dropping stale local pad for pictorial cover %s; re-queueing Flux",
+            "Keeping settled local pad for pictorial cover %s (no re-queue)",
             content_hash[:12],
         )
-        self.cache.invalidate(content_hash)
-        return None
+        self.cache.mark_done(content_hash)
+        return hit
 
     async def submit(self, source_bytes: bytes) -> OutpaintResult | GeneratingStatus:
         """Cache hit → result. Uniform local-only → sync result. Else start job → generating."""
@@ -93,12 +97,12 @@ class OutpaintService:
             raise ValueError("empty image")
         content_hash = self.cache.hash_for(source_bytes)
 
-        hit = self._final_cache_hit(content_hash, source_bytes, touch=True)
+        hit = self._settled_cache_hit(content_hash, source_bytes, touch=True)
         if hit is not None:
             return hit
 
         async with self._lock:
-            hit = self._final_cache_hit(content_hash, source_bytes, touch=True)
+            hit = self._settled_cache_hit(content_hash, source_bytes, touch=True)
             if hit is not None:
                 return hit
             if self.is_generating(content_hash):
@@ -147,7 +151,11 @@ class OutpaintService:
 
     async def _generate(self, source_bytes: bytes, content_hash: str) -> OutpaintResult:
         hit = self._hit_result(content_hash, touch=False)
-        if hit is not None:
+        if hit is not None and (
+            hit.source == "flux"
+            or has_uniform_edges(source_bytes)
+            or self.cache.is_done(content_hash)
+        ):
             return hit
 
         local = await asyncio.to_thread(pad_from_edges, source_bytes)
@@ -171,6 +179,8 @@ class OutpaintService:
             raise RuntimeError("cache write failed")
         if source == "flux":
             (self.cache.cache_dir / f"{content_hash}.flux").touch()
+        # Always mark done so pictorial local fallbacks are not re-queued forever.
+        self.cache.mark_done(content_hash)
 
         return OutpaintResult(
             hash=content_hash,
