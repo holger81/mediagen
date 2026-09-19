@@ -137,9 +137,7 @@ class ComfyUiOutpaintClient:
         try:
             files = {"image": ("album_cover.png", source_bytes, "application/octet-stream")}
             data = {"type": "input", "overwrite": "true"}
-            resp = await self._http().post(
-                f"{self.base_url}/upload/image", files=files, data=data
-            )
+            resp = await self._http().post(f"{self.base_url}/upload/image", files=files, data=data)
             if not resp.is_success:
                 logger.warning("Comfy upload failed: %s", resp.status_code)
                 return None
@@ -210,10 +208,7 @@ class ComfyUiOutpaintClient:
     async def _download_view(self, view: dict[str, str]) -> bytes | None:
         try:
             # Build query manually to match Comfy's URLEncoder behavior for odd names.
-            qs = (
-                f"filename={quote(view['filename'])}"
-                f"&type={quote(view['type'])}"
-            )
+            qs = f"filename={quote(view['filename'])}&type={quote(view['type'])}"
             if view.get("subfolder"):
                 qs += f"&subfolder={quote(view['subfolder'])}"
             resp = await self._http().get(f"{self.base_url}/view?{qs}")

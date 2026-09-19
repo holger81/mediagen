@@ -206,9 +206,7 @@ def pad_from_edges(
         out.paste(Image.new("RGB", (out_w, out_h), uniform), (0, 0))
     else:
         out.paste(Image.new("RGB", (pad_left, out_h), sides.left), (0, 0))
-        out.paste(
-            Image.new("RGB", (pad_right, out_h), sides.right), (out_w - pad_right, 0)
-        )
+        out.paste(Image.new("RGB", (pad_right, out_h), sides.right), (out_w - pad_right, 0))
         mid_w = out_w - pad_left - pad_right
         out.paste(Image.new("RGB", (mid_w, pad_top), sides.top), (pad_left, 0))
         out.paste(
@@ -253,9 +251,7 @@ def pad_mismatch_distance(
         top=_mean_rect(
             pad_pixels, out_w, pad_left, out_w - pad_right, 0, pad_top, snap_black=False
         ),
-        right=_mean_rect(
-            pad_pixels, out_w, out_w - pad_right, out_w, 0, out_h, snap_black=False
-        ),
+        right=_mean_rect(pad_pixels, out_w, out_w - pad_right, out_w, 0, out_h, snap_black=False),
         bottom=_mean_rect(
             pad_pixels,
             out_w,
@@ -460,9 +456,7 @@ def accept_flux_pad(
         padded_bytes, source_bytes, pad_left, pad_top, pad_right, pad_bottom
     ):
         return padded_bytes
-    feathered = feather_pad_seam(
-        padded_bytes, pad_left, pad_top, pad_right, pad_bottom, radius=10
-    )
+    feathered = feather_pad_seam(padded_bytes, pad_left, pad_top, pad_right, pad_bottom, radius=10)
     if feathered and not should_reject_flux_pad(
         feathered, source_bytes, pad_left, pad_top, pad_right, pad_bottom
     ):

@@ -121,9 +121,7 @@ def test_outpaint_pictorial_returns_202_then_ready(client: TestClient) -> None:
     cache: MediaCache = client.app.state.cache
     comfy = SlowComfy(
         base_url=settings.comfyui_base_url,
-        workflow_path=Path(__file__).resolve().parents[1]
-        / "workflows"
-        / "album_outpaint_api.json",
+        workflow_path=Path(__file__).resolve().parents[1] / "workflows" / "album_outpaint_api.json",
     )
     client.app.state.comfy = comfy
     client.app.state.outpaint = OutpaintService(cache, comfy, retry_after_s=1)

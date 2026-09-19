@@ -75,48 +75,35 @@ def test_accept_matching_edge_continuation() -> None:
 
 
 def test_feather_pad_seam_rescues_hard_edge() -> None:
-    """Hard cover-box seam clears the gate after a short cross-fade (real studio Flux case)."""
-    from pathlib import Path
-
-    asset = Path(
-        "/Users/holgerendt/.cursor/projects/Users-holgerendt-Projects-ha-native-dash"
-        "/assets/image-cefdb7db-b159-4a8f-8681-410ed7369be1.jpg"
-    )
-    if not asset.is_file():
-        # CI / machines without the wall screenshot — synthetic near-miss is enough.
-        cover = Image.new("RGB", (64, 64), (180, 90, 70))
-        out_w = 64 + OUTPAINT_PAD_LEFT + OUTPAINT_PAD_RIGHT
-        out_h = 64 + OUTPAINT_PAD_TOP + OUTPAINT_PAD_BOTTOM
-        canvas = Image.new("RGB", (out_w, out_h), (150, 80, 65))
-        canvas.paste(cover, (OUTPAINT_PAD_LEFT, OUTPAINT_PAD_TOP))
-        # Draw a 2px contrasting ring just outside the cover to force a seam.
-        px = canvas.load()
-        for y in range(OUTPAINT_PAD_TOP, OUTPAINT_PAD_TOP + 64):
-            for d in range(1, 4):
-                px[OUTPAINT_PAD_LEFT - d, y] = (40, 40, 40)
-                px[OUTPAINT_PAD_LEFT + 64 + d - 1, y] = (40, 40, 40)
-        buf = io.BytesIO()
-        canvas.save(buf, format="JPEG", quality=95)
-        padded = buf.getvalue()
-        src_buf = io.BytesIO()
-        cover.save(src_buf, format="JPEG", quality=95)
-        source = src_buf.getvalue()
-    else:
-        comfy = asset.read_bytes()
-        im = Image.open(io.BytesIO(comfy)).convert("RGB")
-        src = im.crop((256, 128, 256 + 512, 128 + 512))
-        expected = (
-            512 + OUTPAINT_PAD_LEFT + OUTPAINT_PAD_RIGHT,
-            512 + OUTPAINT_PAD_TOP + OUTPAINT_PAD_BOTTOM,
-        )
-        if im.size != expected:
-            im = im.resize(expected, Image.Resampling.LANCZOS)
-        pad_buf = io.BytesIO()
-        im.save(pad_buf, format="JPEG", quality=92)
-        padded = pad_buf.getvalue()
-        src_buf = io.BytesIO()
-        src.save(src_buf, format="JPEG", quality=95)
-        source = src_buf.getvalue()
+    """Hard cover-box seam clears the gate after a short cross-fade."""
+    # Matching margins (no invent) plus a thin ring just outside the cover box
+    # so only the seam check fails — feather_pad_seam must bring it under gate.
+    cover_c = (180, 90, 70)
+    ring_c = (90, 45, 35)
+    cover = Image.new("RGB", (64, 64), cover_c)
+    out_w = 64 + OUTPAINT_PAD_LEFT + OUTPAINT_PAD_RIGHT
+    out_h = 64 + OUTPAINT_PAD_TOP + OUTPAINT_PAD_BOTTOM
+    canvas = Image.new("RGB", (out_w, out_h), cover_c)
+    canvas.paste(cover, (OUTPAINT_PAD_LEFT, OUTPAINT_PAD_TOP))
+    px = canvas.load()
+    x0, y0 = OUTPAINT_PAD_LEFT, OUTPAINT_PAD_TOP
+    x1, y1 = x0 + 64, y0 + 64
+    for y in range(y0, y1):
+        for d in range(1, 4):
+            px[x0 - d, y] = ring_c
+            px[x1 + d - 1, y] = ring_c
+    for x in range(x0, x1):
+        for d in range(1, 4):
+            px[x, y0 - d] = ring_c
+            px[x, y1 + d - 1] = ring_c
+    buf = io.BytesIO()
+    canvas.save(buf, format="PNG")
+    padded = buf.getvalue()
+    src_buf = io.BytesIO()
+    cover.save(src_buf, format="PNG")
+    source = src_buf.getvalue()
 
     assert should_reject_flux_pad(padded, source) is True
-    assert accept_flux_pad(padded, source) is not None
+    accepted = accept_flux_pad(padded, source)
+    assert accepted is not None
+    assert should_reject_flux_pad(accepted, source) is False

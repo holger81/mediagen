@@ -63,8 +63,7 @@ class MediaCache:
                     """
             )
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_entries_hits_access "
-                "ON entries(hits, last_access)"
+                "CREATE INDEX IF NOT EXISTS idx_entries_hits_access ON entries(hits, last_access)"
             )
 
     @staticmethod
