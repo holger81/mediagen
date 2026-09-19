@@ -12,11 +12,21 @@ Docker media-generation API. Starts with **image outpaint** (greatroom-wall Flux
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
+| `API_HOST_PORT` | `8090` | Host port published to the API |
+| `API_HOST_BIND` | `0.0.0.0` | Host bind address for the published port |
 | `CACHE_DIR` | `/cache` | Cache directory **inside** the container |
 | `CACHE_HOST_DIR` | `/shared/mediagen/cache` | Host path bind-mounted to `CACHE_DIR` |
 | `CACHE_MAX_ITEMS` | `1000` | Max cached outpaints (frequency-aware eviction) |
 | `COMFYUI_BASE_URL` | `http://192.168.10.31:8188` | Existing ComfyUI HTTP API |
 | `CORS_ORIGINS` | `*` | CORS allow list |
+
+### Portainer: “failed programming external connectivity”
+
+That error on `mediagen-api-1` almost always means the **host port is already taken** (or a leftover container still holds it).
+
+1. In Portainer → Stack → Environment, set `API_HOST_PORT` to a free port (e.g. `18090`).
+2. Or on the Docker host: `docker rm -f mediagen-api-1` then redeploy.
+3. Confirm nothing else owns the port: `ss -ltnp | grep 8090` (or your chosen port).
 
 ## API
 

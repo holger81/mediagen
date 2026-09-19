@@ -3,6 +3,10 @@
 #
 # GPU / ComfyUI stays in the separate ROCm stack (local_video docker-compose.comfyui.yml).
 # Point COMFYUI_BASE_URL at that host (default http://192.168.10.31:8188).
+#
+# If deploy fails with "failed programming external connectivity" / mediagen-api-1:
+# another process already owns the host port. Set API_HOST_PORT to a free port
+# (e.g. 18090), or remove the leftover container: docker rm -f mediagen-api-1
 
 services:
   api:
@@ -10,7 +14,8 @@ services:
     image: mediagen:latest
     restart: unless-stopped
     ports:
-      - "8090:8090"
+      # Explicit IPv4 bind avoids some Docker/iptables "external connectivity" failures.
+      - "${API_HOST_BIND:-0.0.0.0}:${API_HOST_PORT:-8090}:8090"
     environment:
       CACHE_DIR: ${CACHE_DIR:-/cache}
       CACHE_MAX_ITEMS: ${CACHE_MAX_ITEMS:-1000}
