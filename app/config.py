@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     comfyui_base_url: str = "http://192.168.10.31:8188"
     workflows_dir: Path = Path("/app/workflows")
     outpaint_poll_interval_s: float = 1.5
-    outpaint_poll_timeout_s: float = 90.0
+    outpaint_poll_timeout_s: float = 180.0
     cors_origins: str = "*"
 
 

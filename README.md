@@ -18,6 +18,7 @@ Docker media-generation API. Starts with **image outpaint** (greatroom-wall Flux
 | `CACHE_HOST_DIR` | `/shared/mediagen/cache` | Host path bind-mounted to `CACHE_DIR` |
 | `CACHE_MAX_ITEMS` | `1000` | Max cached outpaints (frequency-aware eviction) |
 | `COMFYUI_BASE_URL` | `http://192.168.10.31:8188` | Existing ComfyUI HTTP API |
+| `OUTPAINT_POLL_TIMEOUT_S` | `180` | Max seconds to wait for Comfy Flux (cold load can exceed 90s) |
 | `CORS_ORIGINS` | `*` | CORS allow list |
 
 ### Portainer: “failed programming external connectivity”
