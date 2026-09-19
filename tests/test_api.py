@@ -168,12 +168,36 @@ def test_outpaint_pictorial_returns_202_then_ready(client: TestClient) -> None:
     assert ready.headers["X-Outpaint-Source"] == "local"
     assert ready.headers["content-type"].startswith("image/jpeg")
 
+    # Pictorial local pad must not stick: next POST re-queues Flux (202).
     cached = client.post(
         "/v1/image/outpaint",
         files={"image": ("cover.png", data, "image/png")},
     )
-    assert cached.status_code == 200
-    assert cached.headers["X-Cache"] == "hit"
+    assert cached.status_code == 202
+    assert cached.json()["hash"] == content_hash
+
+
+def test_pictorial_stale_local_cache_requeues_flux(client: TestClient) -> None:
+    """A prior local pad for a pictorial cover must not poison Flux forever."""
+    data = _pictorial_png()
+    cache: MediaCache = client.app.state.cache
+    content_hash = cache.hash_for(data)
+    # Simulate a failed Flux run that left only a local pad on disk.
+    local_jpeg = _png_bytes((90, 90, 90))
+    assert cache.put_by_hash(content_hash, local_jpeg, source="local") is not None
+
+    # Cache lookup still serves the interim local pad (GET by hash).
+    lookup = client.get(f"/v1/image/outpaint/{content_hash}")
+    assert lookup.status_code == 200
+    assert lookup.headers["X-Outpaint-Source"] == "local"
+
+    # POST must drop the stale local entry and start a Flux job (202), not 200 hit.
+    resp = client.post(
+        "/v1/image/outpaint",
+        files={"image": ("cover.png", data, "image/png")},
+    )
+    assert resp.status_code == 202
+    assert resp.json()["hash"] == content_hash
 
 
 def test_lookup_missing(client: TestClient) -> None:

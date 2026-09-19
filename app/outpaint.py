@@ -60,18 +60,45 @@ class OutpaintService:
         task = self._inflight.get(content_hash)
         return task is not None and not task.done()
 
+    def _final_cache_hit(
+        self,
+        content_hash: str,
+        source_bytes: bytes,
+        *,
+        touch: bool,
+    ) -> OutpaintResult | None:
+        """Return a cache hit only when it is a finished result (Flux, or local matte).
+
+        Pictorial covers that only have a prior local pad (Flux fail/reject) must
+        not stick forever — drop the entry so the next submit can upgrade to Flux.
+        """
+        hit = self._hit_result(content_hash, touch=touch)
+        if hit is None:
+            return None
+        if hit.source == "flux":
+            return hit
+        # Local is the finished state only for uniform / black-frame covers.
+        if has_uniform_edges(source_bytes):
+            return hit
+        logger.info(
+            "Dropping stale local pad for pictorial cover %s; re-queueing Flux",
+            content_hash[:12],
+        )
+        self.cache.invalidate(content_hash)
+        return None
+
     async def submit(self, source_bytes: bytes) -> OutpaintResult | GeneratingStatus:
         """Cache hit → result. Uniform local-only → sync result. Else start job → generating."""
         if not source_bytes:
             raise ValueError("empty image")
         content_hash = self.cache.hash_for(source_bytes)
 
-        hit = self._hit_result(content_hash, touch=True)
+        hit = self._final_cache_hit(content_hash, source_bytes, touch=True)
         if hit is not None:
             return hit
 
         async with self._lock:
-            hit = self._hit_result(content_hash, touch=True)
+            hit = self._final_cache_hit(content_hash, source_bytes, touch=True)
             if hit is not None:
                 return hit
             if self.is_generating(content_hash):

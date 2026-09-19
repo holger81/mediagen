@@ -186,6 +186,17 @@ class MediaCache:
                 self._enforce_limits(conn)
             return CacheHit(hash=content_hash, path=path, source=source, hits=hits)
 
+    def invalidate(self, content_hash: str) -> bool:
+        """Remove a cache entry and its flux marker. Returns True if a file was removed."""
+        path = self.file_for(content_hash)
+        with self._lock:
+            with self._connect() as conn:
+                conn.execute("DELETE FROM entries WHERE hash = ?", (content_hash,))
+            removed = path.is_file()
+            path.unlink(missing_ok=True)
+            (self.cache_dir / f"{content_hash}.flux").unlink(missing_ok=True)
+            return removed
+
     def count(self) -> int:
         with self._lock, self._connect() as conn:
             row = conn.execute("SELECT COUNT(*) AS n FROM entries").fetchone()
