@@ -372,6 +372,102 @@ def looks_like_local_solid_pad(
     )
 
 
+def feather_pad_seam(
+    padded_bytes: bytes,
+    pad_left: int = OUTPAINT_PAD_LEFT,
+    pad_top: int = OUTPAINT_PAD_TOP,
+    pad_right: int = OUTPAINT_PAD_RIGHT,
+    pad_bottom: int = OUTPAINT_PAD_BOTTOM,
+    *,
+    radius: int = 10,
+) -> bytes | None:
+    """Cross-fade a band straddling the cover box so hard Flux seams blend away.
+
+    Flux Fill often leaves a visible rectangle at the pad boundary even when the
+    margin colors are close. A short linear blend across that edge is enough for
+    the quality gate and for SoftAtmosphere Crop on the wall.
+    """
+    padded = _load_rgb(padded_bytes)
+    if padded is None:
+        return None
+    out_w, out_h = padded.size
+    cover_w = out_w - pad_left - pad_right
+    cover_h = out_h - pad_top - pad_bottom
+    if cover_w <= 0 or cover_h <= 0:
+        return None
+    r = max(2, min(radius, pad_left, pad_top, pad_right, pad_bottom, cover_w // 4, cover_h // 4))
+    px = padded.load()
+    x0, y0 = pad_left, pad_top
+    x1, y1 = out_w - pad_right, out_h - pad_bottom
+
+    def blend(a: tuple[int, ...], b: tuple[int, ...], t: float) -> tuple[int, int, int]:
+        t = 0.0 if t < 0 else 1.0 if t > 1 else t
+        return (
+            int(a[0] + (b[0] - a[0]) * t),
+            int(a[1] + (b[1] - a[1]) * t),
+            int(a[2] + (b[2] - a[2]) * t),
+        )
+
+    # Left / right vertical seams
+    for y in range(y0, y1):
+        for i in range(1, r + 1):
+            t = i / (r + 1)
+            # outside ← inside
+            if x0 - i >= 0:
+                px[x0 - i, y] = blend(px[x0 - i, y], px[min(x0 + i, x1 - 1), y], t)
+            if x1 + i - 1 < out_w:
+                px[x1 + i - 1, y] = blend(px[x1 + i - 1, y], px[max(x1 - i, x0), y], t)
+    # Top / bottom horizontal seams
+    for x in range(x0, x1):
+        for i in range(1, r + 1):
+            t = i / (r + 1)
+            if y0 - i >= 0:
+                px[x, y0 - i] = blend(px[x, y0 - i], px[x, min(y0 + i, y1 - 1)], t)
+            if y1 + i - 1 < out_h:
+                px[x, y1 + i - 1] = blend(px[x, y1 + i - 1], px[x, max(y1 - i, y0)], t)
+
+    buf = io.BytesIO()
+    padded.save(buf, format="JPEG", quality=JPEG_QUALITY)
+    return buf.getvalue()
+
+
+def accept_flux_pad(
+    padded_bytes: bytes,
+    source_bytes: bytes,
+    pad_left: int = OUTPAINT_PAD_LEFT,
+    pad_top: int = OUTPAINT_PAD_TOP,
+    pad_right: int = OUTPAINT_PAD_RIGHT,
+    pad_bottom: int = OUTPAINT_PAD_BOTTOM,
+) -> bytes | None:
+    """Return JPEG bytes to keep as Flux, or None to fall back to local.
+
+    Tries a short seam feather when the raw pad fails only the hard-edge check.
+    """
+    if not padded_bytes:
+        return None
+    src = _load_rgb(source_bytes)
+    pad = _load_rgb(padded_bytes)
+    if src is None or pad is None:
+        return None
+    expected = (
+        src.size[0] + pad_left + pad_right,
+        src.size[1] + pad_top + pad_bottom,
+    )
+    if pad.size != expected:
+        # Wrong geometry — seam metrics would be meaningless.
+        return None
+    if not should_reject_flux_pad(padded_bytes, source_bytes, pad_left, pad_top, pad_right, pad_bottom):
+        return padded_bytes
+    feathered = feather_pad_seam(
+        padded_bytes, pad_left, pad_top, pad_right, pad_bottom, radius=10
+    )
+    if feathered and not should_reject_flux_pad(
+        feathered, source_bytes, pad_left, pad_top, pad_right, pad_bottom
+    ):
+        return feathered
+    return None
+
+
 def should_reject_flux_pad(
     padded_bytes: bytes,
     source_bytes: bytes,

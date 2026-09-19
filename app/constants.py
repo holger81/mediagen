@@ -11,7 +11,7 @@ OUTPAINT_PAD_BOTTOM = 128
 OUTPAINT_PROMPT = ""
 
 # Bump when pad strategy / prompt / workflow quality changes.
-OUTPAINT_CACHE_VERSION = "empty-prompt-feather0-v5"
+OUTPAINT_CACHE_VERSION = "empty-prompt-feather10-v6"
 
 LOAD_IMAGE_NODE_ID = "17"
 POSITIVE_PROMPT_NODE_ID = "23"

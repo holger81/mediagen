@@ -73,7 +73,7 @@ file /tmp/out.jpg
 
 ## Cache behavior
 
-- Key: `sha256(cache_version || source_bytes)` (`empty-prompt-feather0-v5`)
+- Key: `sha256(cache_version || source_bytes)` (`empty-prompt-feather10-v6`)
 - Files under `CACHE_DIR` as `{hash}.jpg` + SQLite hit index
 - Eviction: single-hit (probation) entries first; hot keys (`hits >= 2`) kept longer
 - Single-flight per hash: concurrent POSTs share one Comfy job and all get `202`

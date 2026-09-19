@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from app.cache import MediaCache
 from app.comfy_client import ComfyUiOutpaintClient
-from app.local_pad import has_uniform_edges, pad_from_edges, should_reject_flux_pad
+from app.local_pad import has_uniform_edges, pad_from_edges, accept_flux_pad
 
 logger = logging.getLogger(__name__)
 
@@ -159,8 +159,9 @@ class OutpaintService:
 
         if not has_uniform_edges(source_bytes):
             flux = await self.comfy.outpaint(source_bytes)
-            if flux and not should_reject_flux_pad(flux, source_bytes):
-                result_bytes = flux
+            accepted = accept_flux_pad(flux, source_bytes) if flux else None
+            if accepted:
+                result_bytes = accepted
                 source = "flux"
             elif flux:
                 logger.info("Rejected Flux pad for %s; keeping local", content_hash[:12])
