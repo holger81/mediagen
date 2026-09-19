@@ -1,4 +1,4 @@
-"""Outpaint orchestration: cache → local pad → optional Comfy Flux upgrade."""
+"""Outpaint orchestration: cache hit sync; miss starts background job (202/poll)."""
 
 from __future__ import annotations
 
@@ -21,70 +21,107 @@ class OutpaintResult:
     cache: str  # hit | miss
 
 
+@dataclass(frozen=True)
+class GeneratingStatus:
+    hash: str
+    retry_after_s: int
+    status: str = "generating"
+
+
 class OutpaintService:
-    def __init__(self, cache: MediaCache, comfy: ComfyUiOutpaintClient) -> None:
+    def __init__(
+        self,
+        cache: MediaCache,
+        comfy: ComfyUiOutpaintClient,
+        *,
+        retry_after_s: int = 5,
+    ) -> None:
         self.cache = cache
         self.comfy = comfy
-        self._inflight: dict[str, asyncio.Future[OutpaintResult]] = {}
+        self.retry_after_s = max(1, retry_after_s)
+        self._inflight: dict[str, asyncio.Task[None]] = {}
         self._lock = asyncio.Lock()
 
-    async def outpaint(self, source_bytes: bytes) -> OutpaintResult:
+    def _hit_result(self, content_hash: str, *, touch: bool) -> OutpaintResult | None:
+        hit = self.cache.get_by_hash(content_hash, touch=touch)
+        if hit is None:
+            return None
+        data = hit.path.read_bytes()
+        if not data:
+            return None
+        return OutpaintResult(
+            hash=hit.hash,
+            bytes=data,
+            source=hit.source,
+            cache="hit",
+        )
+
+    def is_generating(self, content_hash: str) -> bool:
+        task = self._inflight.get(content_hash)
+        return task is not None and not task.done()
+
+    async def submit(self, source_bytes: bytes) -> OutpaintResult | GeneratingStatus:
+        """Cache hit → result. Uniform local-only → sync result. Else start job → generating."""
         if not source_bytes:
             raise ValueError("empty image")
         content_hash = self.cache.hash_for(source_bytes)
 
-        hit = self.cache.get(source_bytes, touch=True)
+        hit = self._hit_result(content_hash, touch=True)
         if hit is not None:
-            data = hit.path.read_bytes()
-            if data:
-                return OutpaintResult(
-                    hash=hit.hash, bytes=data, source=hit.source, cache="hit"
-                )
+            return hit
 
         async with self._lock:
-            existing = self._inflight.get(content_hash)
-            if existing is not None:
-                waiter: asyncio.Future[OutpaintResult] = asyncio.get_running_loop().create_future()
+            hit = self._hit_result(content_hash, touch=True)
+            if hit is not None:
+                return hit
+            if self.is_generating(content_hash):
+                return GeneratingStatus(
+                    hash=content_hash,
+                    retry_after_s=self.retry_after_s,
+                )
 
-                def _forward(fut: asyncio.Future[OutpaintResult]) -> None:
-                    if fut.cancelled():
-                        waiter.cancel()
-                        return
-                    exc = fut.exception()
-                    if exc is not None:
-                        waiter.set_exception(exc)
-                    else:
-                        waiter.set_result(fut.result())
+            # Fast path: uniform/black mattes only need local pad — finish sync.
+            if has_uniform_edges(source_bytes):
+                result = await self._generate(source_bytes, content_hash)
+                return result
 
-                existing.add_done_callback(_forward)
-                return await waiter
+            task = asyncio.create_task(
+                self._run_job(content_hash, source_bytes),
+                name=f"outpaint-{content_hash[:12]}",
+            )
+            self._inflight[content_hash] = task
+            return GeneratingStatus(
+                hash=content_hash,
+                retry_after_s=self.retry_after_s,
+            )
 
-            loop = asyncio.get_running_loop()
-            future: asyncio.Future[OutpaintResult] = loop.create_future()
-            self._inflight[content_hash] = future
+    def lookup(self, content_hash: str) -> OutpaintResult | GeneratingStatus | None:
+        """Ready result, generating status, or None if unknown."""
+        hit = self._hit_result(content_hash, touch=True)
+        if hit is not None:
+            return hit
+        if self.is_generating(content_hash):
+            return GeneratingStatus(
+                hash=content_hash,
+                retry_after_s=self.retry_after_s,
+            )
+        return None
 
+    async def _run_job(self, content_hash: str, source_bytes: bytes) -> None:
         try:
-            result = await self._generate(source_bytes, content_hash)
-            if not future.done():
-                future.set_result(result)
-            return result
-        except Exception as exc:
-            if not future.done():
-                future.set_exception(exc)
-            raise
+            await self._generate(source_bytes, content_hash)
+        except Exception:
+            logger.exception("Outpaint job failed for %s", content_hash[:12])
         finally:
             async with self._lock:
-                self._inflight.pop(content_hash, None)
+                current = self._inflight.get(content_hash)
+                if current is asyncio.current_task():
+                    self._inflight.pop(content_hash, None)
 
     async def _generate(self, source_bytes: bytes, content_hash: str) -> OutpaintResult:
-        # Re-check after waiting for the lock / race.
-        hit = self.cache.get_by_hash(content_hash, touch=True)
+        hit = self._hit_result(content_hash, touch=False)
         if hit is not None:
-            data = hit.path.read_bytes()
-            if data:
-                return OutpaintResult(
-                    hash=hit.hash, bytes=data, source=hit.source, cache="hit"
-                )
+            return hit
 
         local = await asyncio.to_thread(pad_from_edges, source_bytes)
         if local is None:
@@ -95,10 +132,7 @@ class OutpaintService:
 
         if not has_uniform_edges(source_bytes):
             flux = await self.comfy.outpaint(source_bytes)
-            if (
-                flux
-                and not should_reject_flux_pad(flux, source_bytes)
-            ):
+            if flux and not should_reject_flux_pad(flux, source_bytes):
                 result_bytes = flux
                 source = "flux"
             elif flux:
@@ -107,7 +141,6 @@ class OutpaintService:
         stored = self.cache.put_by_hash(content_hash, result_bytes, source=source)
         if stored is None:
             raise RuntimeError("cache write failed")
-        # Mark flux settled with sidecar (matches native-dash convention).
         if source == "flux":
             (self.cache.cache_dir / f"{content_hash}.flux").touch()
 
@@ -117,12 +150,3 @@ class OutpaintService:
             source=source,
             cache="miss",
         )
-
-    def lookup(self, content_hash: str) -> OutpaintResult | None:
-        hit = self.cache.get_by_hash(content_hash, touch=True)
-        if hit is None:
-            return None
-        data = hit.path.read_bytes()
-        if not data:
-            return None
-        return OutpaintResult(hash=hit.hash, bytes=data, source=hit.source, cache="hit")

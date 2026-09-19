@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
+import time
 from pathlib import Path
 
 import pytest
@@ -12,7 +14,7 @@ from app.config import get_settings
 from app.main import app
 from app.outpaint import OutpaintService
 from fastapi.testclient import TestClient
-from PIL import Image
+from PIL import Image, ImageDraw
 
 
 @pytest.fixture()
@@ -20,6 +22,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setenv("CACHE_MAX_ITEMS", "100")
     monkeypatch.setenv("COMFYUI_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("OUTPAINT_RETRY_AFTER_S", "1")
     get_settings.cache_clear()
 
     class FakeComfy(ComfyUiOutpaintClient):
@@ -41,13 +44,29 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
         test_client.app.state.settings = settings
         test_client.app.state.cache = cache
         test_client.app.state.comfy = comfy
-        test_client.app.state.outpaint = OutpaintService(cache, comfy)
+        test_client.app.state.outpaint = OutpaintService(
+            cache, comfy, retry_after_s=settings.outpaint_retry_after_s
+        )
         yield test_client
     get_settings.cache_clear()
 
 
 def _png_bytes(color: tuple[int, int, int] = (12, 34, 56)) -> bytes:
     img = Image.new("RGB", (32, 32), color)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _pictorial_png() -> bytes:
+    """Non-uniform edges so Flux path is taken (async 202)."""
+    img = Image.new("RGB", (64, 64))
+    px = img.load()
+    for y in range(64):
+        for x in range(64):
+            px[x, y] = ((x * 3) % 256, (y * 5) % 256, ((x + y) * 7) % 256)
+    draw = ImageDraw.Draw(img)
+    draw.ellipse((16, 16, 48, 48), fill=(220, 40, 40))
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
@@ -62,7 +81,7 @@ def test_health(client: TestClient) -> None:
     assert body["cache_max_items"] == 100
 
 
-def test_outpaint_post_caches_local(client: TestClient) -> None:
+def test_outpaint_uniform_returns_ready_jpeg(client: TestClient) -> None:
     data = _png_bytes()
     resp = client.post(
         "/v1/image/outpaint",
@@ -72,6 +91,7 @@ def test_outpaint_post_caches_local(client: TestClient) -> None:
     assert resp.headers["content-type"].startswith("image/jpeg")
     assert resp.headers["X-Cache"] == "miss"
     assert resp.headers["X-Outpaint-Source"] == "local"
+    assert resp.headers["X-Outpaint-Status"] == "ready"
     content_hash = resp.headers["X-Media-Hash"]
     assert len(content_hash) == 64
 
@@ -86,6 +106,74 @@ def test_outpaint_post_caches_local(client: TestClient) -> None:
     lookup = client.get(f"/v1/image/outpaint/{content_hash}")
     assert lookup.status_code == 200
     assert lookup.headers["X-Cache"] == "hit"
+
+
+def test_outpaint_pictorial_returns_202_then_ready(client: TestClient) -> None:
+    class SlowComfy(ComfyUiOutpaintClient):
+        async def health(self) -> bool:
+            return False
+
+        async def outpaint(self, source_bytes: bytes) -> bytes | None:
+            await asyncio.sleep(0.4)
+            return None
+
+    settings = get_settings()
+    cache: MediaCache = client.app.state.cache
+    comfy = SlowComfy(
+        base_url=settings.comfyui_base_url,
+        workflow_path=Path(__file__).resolve().parents[1]
+        / "workflows"
+        / "album_outpaint_api.json",
+    )
+    client.app.state.comfy = comfy
+    client.app.state.outpaint = OutpaintService(cache, comfy, retry_after_s=1)
+
+    data = _pictorial_png()
+    resp = client.post(
+        "/v1/image/outpaint",
+        files={"image": ("cover.png", data, "image/png")},
+    )
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["status"] == "generating"
+    assert body["retry_after_s"] == 1
+    content_hash = body["hash"]
+    assert len(content_hash) == 64
+    assert resp.headers["Retry-After"] == "1"
+    assert resp.headers["X-Outpaint-Status"] == "generating"
+    assert resp.headers["X-Media-Hash"] == content_hash
+
+    # Still generating shortly after.
+    mid = client.get(f"/v1/image/outpaint/{content_hash}")
+    assert mid.status_code == 202
+    assert mid.json()["status"] == "generating"
+
+    # Concurrent POST should not start a second job.
+    again = client.post(
+        "/v1/image/outpaint",
+        files={"image": ("cover.png", data, "image/png")},
+    )
+    assert again.status_code == 202
+    assert again.json()["hash"] == content_hash
+
+    ready = None
+    for _ in range(40):
+        poll = client.get(f"/v1/image/outpaint/{content_hash}")
+        if poll.status_code == 200:
+            ready = poll
+            break
+        time.sleep(0.05)
+    assert ready is not None
+    assert ready.headers["X-Outpaint-Status"] == "ready"
+    assert ready.headers["X-Outpaint-Source"] == "local"
+    assert ready.headers["content-type"].startswith("image/jpeg")
+
+    cached = client.post(
+        "/v1/image/outpaint",
+        files={"image": ("cover.png", data, "image/png")},
+    )
+    assert cached.status_code == 200
+    assert cached.headers["X-Cache"] == "hit"
 
 
 def test_lookup_missing(client: TestClient) -> None:

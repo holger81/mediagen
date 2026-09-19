@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse, Response
 from app.cache import MediaCache
 from app.comfy_client import ComfyUiOutpaintClient, default_workflow_path
 from app.config import Settings, get_settings
-from app.outpaint import OutpaintService
+from app.outpaint import GeneratingStatus, OutpaintResult, OutpaintService
 
 
 def _workflows_dir(settings: Settings) -> Path:
@@ -38,7 +38,11 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.cache = cache
     app.state.comfy = comfy
-    app.state.outpaint = OutpaintService(cache, comfy)
+    app.state.outpaint = OutpaintService(
+        cache,
+        comfy,
+        retry_after_s=settings.outpaint_retry_after_s,
+    )
     try:
         yield
     finally:
@@ -62,7 +66,7 @@ app.add_middleware(
 )
 
 
-def _jpeg_response(result) -> Response:
+def _jpeg_response(result: OutpaintResult) -> Response:
     return Response(
         content=result.bytes,
         media_type="image/jpeg",
@@ -70,6 +74,24 @@ def _jpeg_response(result) -> Response:
             "X-Media-Hash": result.hash,
             "X-Cache": result.cache,
             "X-Outpaint-Source": result.source,
+            "X-Outpaint-Status": "ready",
+        },
+    )
+
+
+def _generating_response(status: GeneratingStatus) -> JSONResponse:
+    return JSONResponse(
+        status_code=202,
+        content={
+            "status": status.status,
+            "hash": status.hash,
+            "retry_after_s": status.retry_after_s,
+        },
+        headers={
+            "Retry-After": str(status.retry_after_s),
+            "X-Media-Hash": status.hash,
+            "X-Outpaint-Status": "generating",
+            "X-Cache": "miss",
         },
     )
 
@@ -102,12 +124,14 @@ async def image_outpaint(
         raise HTTPException(status_code=400, detail="empty image")
     service: OutpaintService = request.app.state.outpaint
     try:
-        result = await service.outpaint(data)
+        outcome = await service.submit(data)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return _jpeg_response(result)
+    if isinstance(outcome, GeneratingStatus):
+        return _generating_response(outcome)
+    return _jpeg_response(outcome)
 
 
 @app.get("/v1/image/outpaint/{sha256}")
@@ -115,7 +139,9 @@ async def image_outpaint_lookup(sha256: str, request: Request) -> Response:
     if len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256.lower()):
         raise HTTPException(status_code=400, detail="invalid sha256")
     service: OutpaintService = request.app.state.outpaint
-    result = service.lookup(sha256.lower())
-    if result is None:
+    outcome = service.lookup(sha256.lower())
+    if outcome is None:
         raise HTTPException(status_code=404, detail="not cached")
-    return _jpeg_response(result)
+    if isinstance(outcome, GeneratingStatus):
+        return _generating_response(outcome)
+    return _jpeg_response(outcome)

@@ -19,6 +19,7 @@ Docker media-generation API. Starts with **image outpaint** (greatroom-wall Flux
 | `CACHE_MAX_ITEMS` | `1000` | Max cached outpaints (frequency-aware eviction) |
 | `COMFYUI_BASE_URL` | `http://192.168.10.31:8188` | Existing ComfyUI HTTP API |
 | `OUTPAINT_POLL_TIMEOUT_S` | `180` | Max seconds to wait for Comfy Flux (cold load can exceed 90s) |
+| `OUTPAINT_RETRY_AFTER_S` | `5` | Suggested poll interval when status is `generating` |
 | `CORS_ORIGINS` | `*` | CORS allow list |
 
 ### Portainer: “failed programming external connectivity”
@@ -31,18 +32,43 @@ That error on `mediagen-api-1` almost always means the **host port is already ta
 
 ## API
 
-- `POST /v1/image/outpaint` — multipart field `image`; returns JPEG
-- `GET /v1/image/outpaint/{sha256}` — cache-only lookup
+### Outpaint (async)
+
+- `POST /v1/image/outpaint` — multipart field `image`
+  - **Cache hit / fast local-only (uniform edges):** `200` JPEG
+  - **Generation started (or already in flight):** `202 Accepted` JSON
+- `GET /v1/image/outpaint/{sha256}` — poll by content hash
+  - **Ready:** `200` JPEG
+  - **Still generating:** `202` JSON
+  - **Unknown:** `404`
 - `GET /health` — API + Comfy reachability
 
-Response headers: `X-Media-Hash`, `X-Cache: hit|miss`, `X-Outpaint-Source: flux|local`.
+**Ready (`200`) headers:** `X-Media-Hash`, `X-Cache: hit|miss`, `X-Outpaint-Source: flux|local`, `X-Outpaint-Status: ready`.
+
+**Generating (`202`) body + headers:**
+
+```json
+{ "status": "generating", "hash": "<sha256>", "retry_after_s": 5 }
+```
+
+Headers: `Retry-After`, `X-Media-Hash`, `X-Outpaint-Status: generating`, `X-Cache: miss`.
 
 ### Example
 
 ```bash
-curl -sS -X POST http://HOST:8090/v1/image/outpaint \
-  -F image=@cover.jpg \
-  -o outpaint.jpg -D -
+# First miss on a pictorial cover → 202
+curl -sS -D - -o /tmp/out.json -X POST http://HOST:18090/v1/image/outpaint \
+  -F image=@cover.jpg
+HASH=$(python3 -c 'import json;print(json.load(open("/tmp/out.json"))["hash"])')
+
+# Poll until ready
+while true; do
+  code=$(curl -sS -o /tmp/out.jpg -w '%{http_code}' \
+    "http://HOST:18090/v1/image/outpaint/$HASH")
+  [[ "$code" == "200" ]] && break
+  sleep 5
+done
+file /tmp/out.jpg
 ```
 
 ## Cache behavior
@@ -50,6 +76,7 @@ curl -sS -X POST http://HOST:8090/v1/image/outpaint \
 - Key: `sha256(cache_version || source_bytes)` (`empty-prompt-feather0-v5`)
 - Files under `CACHE_DIR` as `{hash}.jpg` + SQLite hit index
 - Eviction: single-hit (probation) entries first; hot keys (`hits >= 2`) kept longer
+- Single-flight per hash: concurrent POSTs share one Comfy job and all get `202`
 
 ## Local development
 
@@ -66,7 +93,6 @@ uvicorn app.main:app --reload --port 8090
 Matches ha_native_dash greatroom wall:
 
 1. Content-hash cache lookup
-2. Instant local edge pad (Pillow)
-3. Skip Flux for uniform/black mattes
-4. Else ComfyUI Flux Fill (`workflows/album_outpaint_api.json`)
-5. Quality gate; reject invented mats / hard seams → keep local pad
+2. Instant local edge pad (Pillow) — sync `200` for uniform/black mattes
+3. Pictorial covers: background Flux Fill (`workflows/album_outpaint_api.json`); clients poll
+4. Quality gate; reject invented mats / hard seams → keep local pad
