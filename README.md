@@ -77,6 +77,12 @@ file /tmp/out.jpg
 - Files under `CACHE_DIR` as `{hash}.jpg` + SQLite hit index
 - Eviction: single-hit (probation) entries first; hot keys (`hits >= 2`) kept longer
 - Single-flight per hash: concurrent POSTs share one Comfy job and all get `202`
+- **Flux upgrade:** a cached `local` pad is final only for uniform/black mattes. A
+  pictorial cover that previously landed on local (Flux fail/reject) is dropped on
+  the next POST so Flux can run again — otherwise walls stay on soft enlarge forever.
+- **Flux upgrade:** a cached `local` pad is final only for uniform/black mattes. A
+  pictorial cover that previously landed on local (Flux fail/reject) is dropped on
+  the next POST so Flux can run again — otherwise walls stay on soft enlarge forever.
 
 ## Local development
 
