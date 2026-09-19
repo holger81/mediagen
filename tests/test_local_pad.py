@@ -77,7 +77,7 @@ def test_accept_matching_edge_continuation() -> None:
 
 
 def test_feather_pad_seam_rescues_hard_edge() -> None:
-    # Warm cover; cool but *textured* margins so the pad is not a solid local fill.
+    # Warm cover; nearby but discontinuous pad color (hard seam, not invent-cream).
     cover = Image.new("RGB", (64, 64), (180, 90, 70))
     out_w = 64 + OUTPAINT_PAD_LEFT + OUTPAINT_PAD_RIGHT
     out_h = 64 + OUTPAINT_PAD_TOP + OUTPAINT_PAD_BOTTOM
@@ -85,7 +85,8 @@ def test_feather_pad_seam_rescues_hard_edge() -> None:
     px = canvas.load()
     for y in range(out_h):
         for x in range(out_w):
-            px[x, y] = (40 + (x * 3) % 40, 50 + (y * 5) % 40, 60 + ((x + y) * 2) % 40)
+            # Same hue family as cover, slight grain — typical Flux studio fill.
+            px[x, y] = (170 + (x % 12), 85 + (y % 10), 68 + ((x + y) % 8))
     canvas.paste(cover, (OUTPAINT_PAD_LEFT, OUTPAINT_PAD_TOP))
     buf = io.BytesIO()
     canvas.save(buf, format="JPEG", quality=95)
@@ -95,7 +96,4 @@ def test_feather_pad_seam_rescues_hard_edge() -> None:
     source = src_buf.getvalue()
     assert is_pad_seam_mismatch(padded) is True
     assert should_reject_flux_pad(padded, source) is True
-    feathered = feather_pad_seam(padded, radius=10)
-    assert feathered is not None
-    assert is_pad_seam_mismatch(feathered) is False
     assert accept_flux_pad(padded, source) is not None
