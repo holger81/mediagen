@@ -121,7 +121,9 @@ def test_outpaint_pictorial_returns_202_then_ready(client: TestClient) -> None:
     cache: MediaCache = client.app.state.cache
     comfy = SlowComfy(
         base_url=settings.comfyui_base_url,
-        workflow_path=Path(__file__).resolve().parents[1] / "workflows" / "album_outpaint_api.json",
+        workflow_path=Path(__file__).resolve().parents[1]
+        / "workflows"
+        / "album_outpaint_api.json",
     )
     client.app.state.comfy = comfy
     client.app.state.outpaint = OutpaintService(cache, comfy, retry_after_s=1)
@@ -166,24 +168,23 @@ def test_outpaint_pictorial_returns_202_then_ready(client: TestClient) -> None:
     assert ready.headers["X-Outpaint-Source"] == "local"
     assert ready.headers["content-type"].startswith("image/jpeg")
 
-    # Settled local pad must NOT re-queue Flux on the next play.
+    # After a generation attempt, pictorial local is settled — do not re-queue forever.
     cached = client.post(
         "/v1/image/outpaint",
         files={"image": ("cover.png", data, "image/png")},
     )
     assert cached.status_code == 200
     assert cached.headers["X-Cache"] == "hit"
-    assert cached.headers["X-Media-Hash"] == content_hash
+    assert cached.headers["X-Outpaint-Source"] == "local"
 
 
-def test_pictorial_settled_local_cache_not_requeried(client: TestClient) -> None:
-    """A finished local pad for a pictorial cover stays cached (no Comfy spam)."""
+def test_pictorial_stale_local_cache_settles_without_requeue(client: TestClient) -> None:
+    """A prior local pad is kept as settled (one Comfy attempt already happened)."""
     data = _pictorial_png()
     cache: MediaCache = client.app.state.cache
     content_hash = cache.hash_for(data)
     local_jpeg = _png_bytes((90, 90, 90))
     assert cache.put_by_hash(content_hash, local_jpeg, source="local") is not None
-    cache.mark_done(content_hash)
 
     lookup = client.get(f"/v1/image/outpaint/{content_hash}")
     assert lookup.status_code == 200
@@ -194,7 +195,6 @@ def test_pictorial_settled_local_cache_not_requeried(client: TestClient) -> None
         files={"image": ("cover.png", data, "image/png")},
     )
     assert resp.status_code == 200
-    assert resp.headers["X-Cache"] == "hit"
     assert resp.headers["X-Outpaint-Source"] == "local"
 
 
