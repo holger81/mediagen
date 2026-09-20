@@ -31,7 +31,7 @@ class CountingComfy(ComfyUiOutpaintClient):
         super().__init__(base_url="http://127.0.0.1:9", workflow_path=workflow_path)
         self.calls = 0
 
-    async def outpaint(self, source_bytes: bytes) -> bytes | None:
+    async def outpaint(self, source_bytes: bytes, *, layout=None) -> bytes | None:
         self.calls += 1
         await asyncio.sleep(0.05)
         return None  # force local fallback

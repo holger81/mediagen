@@ -5,10 +5,14 @@ from __future__ import annotations
 import hashlib
 import io
 import struct
+from typing import TYPE_CHECKING
 
 from PIL import Image
 
 from app.constants import OUTPAINT_CACHE_VERSION
+
+if TYPE_CHECKING:
+    from app.layout import OutpaintLayout
 
 
 def canonicalize_image_bytes(source_bytes: bytes) -> bytes | None:
@@ -36,10 +40,16 @@ def canonicalize_image_bytes(source_bytes: bytes) -> bytes | None:
 def content_hash(
     source_bytes: bytes,
     cache_version: str = OUTPAINT_CACHE_VERSION,
+    *,
+    layout: OutpaintLayout | None = None,
 ) -> str:
-    """sha256(version || fingerprint) with fallback to raw bytes."""
+    """sha256(version || layout_tag || fingerprint) with fallback to raw bytes."""
+    from app.layout import OutpaintLayout
+
     digest = hashlib.sha256()
     digest.update(cache_version.encode("utf-8"))
+    pads = layout if layout is not None else OutpaintLayout.defaults()
+    digest.update(pads.layout_tag())
     canonical = canonicalize_image_bytes(source_bytes)
     if canonical is not None:
         digest.update(b"canon4\0")

@@ -6,13 +6,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
 from app.cache import MediaCache
 from app.comfy_client import ComfyUiOutpaintClient, default_workflow_path
 from app.config import Settings, get_settings
+from app.layout import parse_outpaint_layout, source_size
 from app.outpaint import GeneratingStatus, OutpaintResult, OutpaintService
 
 
@@ -66,6 +67,15 @@ app.add_middleware(
 )
 
 
+def _layout_headers(layout_result: OutpaintResult | GeneratingStatus) -> dict[str, str]:
+    return {
+        "X-Outpaint-Pad": layout_result.layout.header_pad(),
+        "X-Outpaint-Size": layout_result.layout.header_size(
+            layout_result.src_w, layout_result.src_h
+        ),
+    }
+
+
 def _jpeg_response(result: OutpaintResult) -> Response:
     return Response(
         content=result.bytes,
@@ -75,6 +85,7 @@ def _jpeg_response(result: OutpaintResult) -> Response:
             "X-Cache": result.cache,
             "X-Outpaint-Source": result.source,
             "X-Outpaint-Status": "ready",
+            **_layout_headers(result),
         },
     )
 
@@ -92,6 +103,7 @@ def _generating_response(status: GeneratingStatus) -> JSONResponse:
             "X-Media-Hash": status.hash,
             "X-Outpaint-Status": "generating",
             "X-Cache": "miss",
+            **_layout_headers(status),
         },
     )
 
@@ -118,13 +130,37 @@ async def health(request: Request) -> JSONResponse:
 async def image_outpaint(
     request: Request,
     image: Annotated[UploadFile, File(...)],
+    out_width: Annotated[str | None, Form()] = None,
+    out_height: Annotated[str | None, Form()] = None,
+    x: Annotated[str | None, Form()] = None,
+    y: Annotated[str | None, Form()] = None,
+    pad_left: Annotated[str | None, Form()] = None,
+    pad_top: Annotated[str | None, Form()] = None,
+    pad_right: Annotated[str | None, Form()] = None,
+    pad_bottom: Annotated[str | None, Form()] = None,
 ) -> Response:
     data = await image.read()
     if not data:
         raise HTTPException(status_code=400, detail="empty image")
+    try:
+        src_w, src_h = source_size(data)
+        layout = parse_outpaint_layout(
+            src_w=src_w,
+            src_h=src_h,
+            out_width=out_width,
+            out_height=out_height,
+            x=x,
+            y=y,
+            pad_left=pad_left,
+            pad_top=pad_top,
+            pad_right=pad_right,
+            pad_bottom=pad_bottom,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     service: OutpaintService = request.app.state.outpaint
     try:
-        outcome = await service.submit(data)
+        outcome = await service.submit(data, layout=layout, src_w=src_w, src_h=src_h)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

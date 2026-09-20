@@ -34,16 +34,20 @@ That error on `mediagen-api-1` almost always means the **host port is already ta
 
 ### Outpaint (async)
 
-- `POST /v1/image/outpaint` — multipart field `image`
+- `POST /v1/image/outpaint` — multipart field `image`, optional layout fields
+  - **Defaults** (omit layout): pads `256/128/256/128` (left/top/right/bottom)
+  - **Pads form:** `pad_left`, `pad_top`, `pad_right`, `pad_bottom` (all four required)
+  - **Canvas form:** `out_width`, `out_height`, `x`, `y` (place unscaled source at `x,y`; pads derived)
+  - Do not mix forms. Translate only — source is never resized.
   - **Cache hit / fast local-only (uniform edges):** `200` JPEG
   - **Generation started (or already in flight):** `202 Accepted` JSON
-- `GET /v1/image/outpaint/{sha256}` — poll by content hash
+- `GET /v1/image/outpaint/{sha256}` — poll by content hash (hash includes layout)
   - **Ready:** `200` JPEG
   - **Still generating:** `202` JSON
   - **Unknown:** `404`
 - `GET /health` — API + Comfy reachability
 
-**Ready (`200`) headers:** `X-Media-Hash`, `X-Cache: hit|miss`, `X-Outpaint-Source: flux|local`, `X-Outpaint-Status: ready`.
+**Ready (`200`) headers:** `X-Media-Hash`, `X-Cache: hit|miss`, `X-Outpaint-Source: flux|local`, `X-Outpaint-Status: ready`, `X-Outpaint-Pad: L,T,R,B`, `X-Outpaint-Size: WwHh`.
 
 **Generating (`202`) body + headers:**
 
@@ -51,7 +55,7 @@ That error on `mediagen-api-1` almost always means the **host port is already ta
 { "status": "generating", "hash": "<sha256>", "retry_after_s": 5 }
 ```
 
-Headers: `Retry-After`, `X-Media-Hash`, `X-Outpaint-Status: generating`, `X-Cache: miss`.
+Headers: `Retry-After`, `X-Media-Hash`, `X-Outpaint-Status: generating`, `X-Cache: miss`, `X-Outpaint-Pad`, `X-Outpaint-Size`.
 
 ### Example
 
@@ -60,6 +64,10 @@ Headers: `Retry-After`, `X-Media-Hash`, `X-Outpaint-Status: generating`, `X-Cach
 curl -sS -D - -o /tmp/out.json -X POST http://HOST:18090/v1/image/outpaint \
   -F image=@cover.jpg
 HASH=$(python3 -c 'import json;print(json.load(open("/tmp/out.json"))["hash"])')
+
+# Custom pads (or use out_width/out_height/x/y instead)
+curl -sS -D - -o /tmp/out.jpg -X POST http://HOST:18090/v1/image/outpaint \
+  -F image=@cover.jpg -F pad_left=64 -F pad_top=32 -F pad_right=64 -F pad_bottom=32
 
 # Poll until ready
 while true; do
@@ -73,13 +81,13 @@ file /tmp/out.jpg
 
 ## Cache behavior
 
-- Key: decoded RGB fingerprint `sha256(version || WxH || pixels)` (PNG/BMP of the
-  same pixels share a key; raw garbage uploads fall back to byte hash)
+- Key: `sha256(version || pads:L,T,R,B || decoded RGB fingerprint)` — same cover with
+  different layout is a different cache entry
 - After each generation attempt (Flux **or** local fallback), a `.done` marker is
   written — pictorial local pads are **not** wiped and re-queued on every play
   (this was regenerating Comfy jobs like `ha_album_outpaint_00367_` /
   `00420_` for the same cover)
-- Files under `CACHE_DIR` as `{hash}.jpg` + SQLite hit index
+- Files under `CACHE_DIR` as `{hash}.jpg` + `{hash}.pads` + SQLite hit index
 - Eviction: single-hit (probation) entries first; hot keys (`hits >= 2`) kept longer
 - Single-flight per hash: concurrent POSTs share one Comfy job and all get `202`
 

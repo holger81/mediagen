@@ -29,7 +29,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
         async def health(self) -> bool:
             return False
 
-        async def outpaint(self, source_bytes: bytes) -> bytes | None:
+        async def outpaint(self, source_bytes: bytes, *, layout=None) -> bytes | None:
             return None
 
     with TestClient(app) as test_client:
@@ -92,6 +92,8 @@ def test_outpaint_uniform_returns_ready_jpeg(client: TestClient) -> None:
     assert resp.headers["X-Cache"] == "miss"
     assert resp.headers["X-Outpaint-Source"] == "local"
     assert resp.headers["X-Outpaint-Status"] == "ready"
+    assert resp.headers["X-Outpaint-Pad"] == "256,128,256,128"
+    assert resp.headers["X-Outpaint-Size"] == "544x288"
     content_hash = resp.headers["X-Media-Hash"]
     assert len(content_hash) == 64
 
@@ -106,6 +108,71 @@ def test_outpaint_uniform_returns_ready_jpeg(client: TestClient) -> None:
     lookup = client.get(f"/v1/image/outpaint/{content_hash}")
     assert lookup.status_code == 200
     assert lookup.headers["X-Cache"] == "hit"
+    assert lookup.headers["X-Outpaint-Pad"] == "256,128,256,128"
+
+
+def test_outpaint_custom_pads(client: TestClient) -> None:
+    data = _png_bytes()
+    resp = client.post(
+        "/v1/image/outpaint",
+        files={"image": ("cover.png", data, "image/png")},
+        data={
+            "pad_left": "40",
+            "pad_top": "20",
+            "pad_right": "60",
+            "pad_bottom": "30",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers["X-Outpaint-Pad"] == "40,20,60,30"
+    assert resp.headers["X-Outpaint-Size"] == "132x82"
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(resp.content))
+    assert img.size == (132, 82)
+
+
+def test_outpaint_canvas_xy(client: TestClient) -> None:
+    data = _png_bytes()  # 32x32
+    resp = client.post(
+        "/v1/image/outpaint",
+        files={"image": ("cover.png", data, "image/png")},
+        data={
+            "out_width": "200",
+            "out_height": "100",
+            "x": "50",
+            "y": "10",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers["X-Outpaint-Pad"] == "50,10,118,58"
+    assert resp.headers["X-Outpaint-Size"] == "200x100"
+
+
+def test_outpaint_layout_rejected(client: TestClient) -> None:
+    data = _png_bytes()
+    resp = client.post(
+        "/v1/image/outpaint",
+        files={"image": ("cover.png", data, "image/png")},
+        data={"pad_left": "10", "out_width": "100"},
+    )
+    assert resp.status_code == 400
+
+
+def test_different_layouts_separate_cache(client: TestClient) -> None:
+    data = _png_bytes()
+    a = client.post(
+        "/v1/image/outpaint",
+        files={"image": ("cover.png", data, "image/png")},
+        data={"pad_left": "10", "pad_top": "10", "pad_right": "10", "pad_bottom": "10"},
+    )
+    b = client.post(
+        "/v1/image/outpaint",
+        files={"image": ("cover.png", data, "image/png")},
+        data={"pad_left": "20", "pad_top": "10", "pad_right": "10", "pad_bottom": "10"},
+    )
+    assert a.status_code == 200 and b.status_code == 200
+    assert a.headers["X-Media-Hash"] != b.headers["X-Media-Hash"]
 
 
 def test_outpaint_pictorial_returns_202_then_ready(client: TestClient) -> None:
@@ -113,7 +180,7 @@ def test_outpaint_pictorial_returns_202_then_ready(client: TestClient) -> None:
         async def health(self) -> bool:
             return False
 
-        async def outpaint(self, source_bytes: bytes) -> bytes | None:
+        async def outpaint(self, source_bytes: bytes, *, layout=None) -> bytes | None:
             await asyncio.sleep(0.4)
             return None
 
@@ -121,9 +188,7 @@ def test_outpaint_pictorial_returns_202_then_ready(client: TestClient) -> None:
     cache: MediaCache = client.app.state.cache
     comfy = SlowComfy(
         base_url=settings.comfyui_base_url,
-        workflow_path=Path(__file__).resolve().parents[1]
-        / "workflows"
-        / "album_outpaint_api.json",
+        workflow_path=Path(__file__).resolve().parents[1] / "workflows" / "album_outpaint_api.json",
     )
     client.app.state.comfy = comfy
     client.app.state.outpaint = OutpaintService(cache, comfy, retry_after_s=1)

@@ -18,6 +18,7 @@ from app.constants import (
     POSITIVE_PROMPT_NODE_ID,
     WORKFLOW_FILENAME,
 )
+from app.layout import OutpaintLayout
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +28,13 @@ def prepare_workflow(
     image_name: str,
     positive_prompt: str = OUTPAINT_PROMPT,
     seed: int | None = None,
+    *,
+    layout: OutpaintLayout | None = None,
 ) -> dict[str, Any]:
-    """Rewrite LoadImage filename, positive CLIP prompt, and a fresh seed."""
+    """Rewrite LoadImage filename, pads, positive CLIP prompt, and a fresh seed."""
     if seed is None:
         seed = random.randint(0, 2_147_483_647)
+    pads = layout if layout is not None else OutpaintLayout.defaults()
     result: dict[str, Any] = {}
     wrote_image = False
     wrote_prompt = False
@@ -53,6 +57,12 @@ def prepare_workflow(
             wrote_prompt = True
         elif class_type == "KSampler":
             inputs["seed"] = seed
+            node["inputs"] = inputs
+        elif class_type == "ImagePadForOutpaint":
+            inputs["left"] = pads.pad_left
+            inputs["top"] = pads.pad_top
+            inputs["right"] = pads.pad_right
+            inputs["bottom"] = pads.pad_bottom
             node["inputs"] = inputs
         result[key] = node
 
@@ -119,13 +129,18 @@ class ComfyUiOutpaintClient:
         except httpx.HTTPError:
             return False
 
-    async def outpaint(self, source_bytes: bytes) -> bytes | None:
+    async def outpaint(
+        self,
+        source_bytes: bytes,
+        *,
+        layout: OutpaintLayout | None = None,
+    ) -> bytes | None:
         if not self.base_url or not source_bytes:
             return None
         uploaded = await self._upload_image(source_bytes)
         if uploaded is None:
             return None
-        prompt_id = await self._queue_prompt(uploaded)
+        prompt_id = await self._queue_prompt(uploaded, layout=layout)
         if prompt_id is None:
             return None
         view = await self._wait_for_output(prompt_id)
@@ -151,9 +166,14 @@ class ComfyUiOutpaintClient:
             logger.warning("Comfy upload error: %s", exc)
             return None
 
-    async def _queue_prompt(self, image_name: str) -> str | None:
+    async def _queue_prompt(
+        self,
+        image_name: str,
+        *,
+        layout: OutpaintLayout | None = None,
+    ) -> str | None:
         try:
-            workflow = prepare_workflow(self._load_workflow(), image_name=image_name)
+            workflow = prepare_workflow(self._load_workflow(), image_name=image_name, layout=layout)
             payload = {"prompt": workflow, "client_id": str(uuid.uuid4())}
             resp = await self._http().post(f"{self.base_url}/prompt", json=payload)
             if not resp.is_success:

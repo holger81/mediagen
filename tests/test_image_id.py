@@ -6,6 +6,7 @@ import io
 
 from app.cache import MediaCache
 from app.image_id import canonicalize_image_bytes, content_hash
+from app.layout import OutpaintLayout
 from PIL import Image
 
 
@@ -52,3 +53,11 @@ def test_cache_hits_same_pixels_different_container(tmp_path) -> None:
     assert hit is not None
     assert hit.source == "flux"
     assert hit.path.read_bytes() == out
+
+
+def test_different_layouts_different_hash() -> None:
+    src = _png((10, 20, 30))
+    a = content_hash(src, layout=OutpaintLayout(10, 10, 10, 10))
+    b = content_hash(src, layout=OutpaintLayout(20, 10, 10, 10))
+    assert a != b
+    assert content_hash(src) == content_hash(src, layout=OutpaintLayout.defaults())

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from app.constants import OUTPAINT_CACHE_VERSION
 from app.image_id import content_hash as image_content_hash
+from app.layout import OutpaintLayout
 
 
 @dataclass(frozen=True)
@@ -67,17 +68,52 @@ class MediaCache:
             )
 
     @staticmethod
-    def content_hash(source_bytes: bytes, cache_version: str = OUTPAINT_CACHE_VERSION) -> str:
-        return image_content_hash(source_bytes, cache_version)
+    def content_hash(
+        source_bytes: bytes,
+        cache_version: str = OUTPAINT_CACHE_VERSION,
+        *,
+        layout: OutpaintLayout | None = None,
+    ) -> str:
+        return image_content_hash(source_bytes, cache_version, layout=layout)
 
-    def hash_for(self, source_bytes: bytes) -> str:
-        return self.content_hash(source_bytes, self.cache_version)
+    def hash_for(
+        self,
+        source_bytes: bytes,
+        *,
+        layout: OutpaintLayout | None = None,
+    ) -> str:
+        return self.content_hash(source_bytes, self.cache_version, layout=layout)
 
     def file_for(self, content_hash: str) -> Path:
         return self.cache_dir / f"{content_hash}.jpg"
 
     def done_marker_for(self, content_hash: str) -> Path:
         return self.cache_dir / f"{content_hash}.done"
+
+    def pads_marker_for(self, content_hash: str) -> Path:
+        return self.cache_dir / f"{content_hash}.pads"
+
+    def write_layout(self, content_hash: str, layout: OutpaintLayout) -> None:
+        with self._lock:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            self.pads_marker_for(content_hash).write_text(layout.header_pad(), encoding="utf-8")
+
+    def read_layout(self, content_hash: str) -> OutpaintLayout | None:
+        path = self.pads_marker_for(content_hash)
+        if not path.is_file():
+            return None
+        try:
+            parts = path.read_text(encoding="utf-8").strip().split(",")
+            if len(parts) != 4:
+                return None
+            return OutpaintLayout(
+                pad_left=int(parts[0]),
+                pad_top=int(parts[1]),
+                pad_right=int(parts[2]),
+                pad_bottom=int(parts[3]),
+            )
+        except (OSError, ValueError):
+            return None
 
     def mark_done(self, content_hash: str) -> None:
         """Mark a generation attempt finished (Flux or local fallback)."""
@@ -88,8 +124,14 @@ class MediaCache:
     def is_done(self, content_hash: str) -> bool:
         return self.done_marker_for(content_hash).is_file()
 
-    def get(self, source_bytes: bytes, *, touch: bool = True) -> CacheHit | None:
-        content_hash = self.hash_for(source_bytes)
+    def get(
+        self,
+        source_bytes: bytes,
+        *,
+        touch: bool = True,
+        layout: OutpaintLayout | None = None,
+    ) -> CacheHit | None:
+        content_hash = self.hash_for(source_bytes, layout=layout)
         return self.get_by_hash(content_hash, touch=touch)
 
     def get_by_hash(self, content_hash: str, *, touch: bool = True) -> CacheHit | None:
@@ -137,10 +179,11 @@ class MediaCache:
         result_bytes: bytes,
         *,
         source: str,
+        layout: OutpaintLayout | None = None,
     ) -> CacheHit | None:
         if not result_bytes:
             return None
-        content_hash = self.hash_for(source_bytes)
+        content_hash = self.hash_for(source_bytes, layout=layout)
         return self.put_by_hash(content_hash, result_bytes, source=source)
 
     def put_by_hash(
@@ -204,6 +247,7 @@ class MediaCache:
             path.unlink(missing_ok=True)
             (self.cache_dir / f"{content_hash}.flux").unlink(missing_ok=True)
             self.done_marker_for(content_hash).unlink(missing_ok=True)
+            self.pads_marker_for(content_hash).unlink(missing_ok=True)
             return removed
 
     def count(self) -> int:
@@ -242,3 +286,4 @@ class MediaCache:
             path.unlink(missing_ok=True)
             (self.cache_dir / f"{victim_hash}.flux").unlink(missing_ok=True)
             self.done_marker_for(victim_hash).unlink(missing_ok=True)
+            self.pads_marker_for(victim_hash).unlink(missing_ok=True)

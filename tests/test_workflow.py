@@ -18,10 +18,21 @@ def test_prepare_workflow_sets_image_prompt_seed() -> None:
     assert prepared["17"]["inputs"]["image"] == "uploaded.png"
     assert prepared[POSITIVE_PROMPT_NODE_ID]["inputs"]["text"] == OUTPAINT_PROMPT
     assert prepared["3"]["inputs"]["seed"] == 42
-    # Pads unchanged.
+    # Pads unchanged when layout omitted.
     assert prepared["44"]["inputs"]["left"] == 256
     assert prepared["44"]["inputs"]["top"] == 128
     assert prepared["44"]["inputs"]["feathering"] == 0
+
+
+def test_prepare_workflow_rewrites_pads() -> None:
+    from app.layout import OutpaintLayout
+
+    layout = OutpaintLayout(pad_left=64, pad_top=32, pad_right=96, pad_bottom=48)
+    prepared = prepare_workflow(WORKFLOW, image_name="x.png", seed=1, layout=layout)
+    assert prepared["44"]["inputs"]["left"] == 64
+    assert prepared["44"]["inputs"]["top"] == 32
+    assert prepared["44"]["inputs"]["right"] == 96
+    assert prepared["44"]["inputs"]["bottom"] == 48
 
 
 def test_prepare_workflow_empty_prompt_by_default() -> None:

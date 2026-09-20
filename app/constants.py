@@ -7,11 +7,16 @@ OUTPAINT_PAD_TOP = 128
 OUTPAINT_PAD_RIGHT = 256
 OUTPAINT_PAD_BOTTOM = 128
 
+# Caps for requestable layout (translate-only outpaint).
+OUTPAINT_MAX_PAD = 2048
+OUTPAINT_MAX_OUTPUT_SIDE = 4096
+OUTPAINT_MAX_PIXELS = 16_777_216  # 4096^2
+
 # Intentionally empty — Flux fill extends from edges; instruction prompts hurt quality.
 OUTPAINT_PROMPT = ""
 
-# Bump when pad strategy / prompt / workflow quality changes.
-OUTPAINT_CACHE_VERSION = "empty-prompt-feather10-v6"
+# Bump when pad strategy / prompt / workflow / hash layout changes.
+OUTPAINT_CACHE_VERSION = "empty-prompt-feather10-layout-v7"
 
 LOAD_IMAGE_NODE_ID = "17"
 POSITIVE_PROMPT_NODE_ID = "23"
