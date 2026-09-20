@@ -14,6 +14,8 @@ import httpx
 
 from app.constants import (
     LOAD_IMAGE_NODE_ID,
+    NEGATIVE_PROMPT_NODE_ID,
+    OUTPAINT_NEGATIVE_PROMPT,
     OUTPAINT_PROMPT,
     POSITIVE_PROMPT_NODE_ID,
     WORKFLOW_FILENAME,
@@ -27,17 +29,19 @@ def prepare_workflow(
     workflow: dict[str, Any],
     image_name: str,
     positive_prompt: str = OUTPAINT_PROMPT,
+    negative_prompt: str = OUTPAINT_NEGATIVE_PROMPT,
     seed: int | None = None,
     *,
     layout: OutpaintLayout | None = None,
 ) -> dict[str, Any]:
-    """Rewrite LoadImage filename, pads, positive CLIP prompt, and a fresh seed."""
+    """Rewrite LoadImage, pads, positive/negative CLIP prompts, and a fresh seed."""
     if seed is None:
         seed = random.randint(0, 2_147_483_647)
     pads = layout if layout is not None else OutpaintLayout.defaults()
     result: dict[str, Any] = {}
     wrote_image = False
-    wrote_prompt = False
+    wrote_positive = False
+    wrote_negative = False
     for key, value in workflow.items():
         if key == "_meta":
             continue
@@ -54,7 +58,11 @@ def prepare_workflow(
         elif class_type == "CLIPTextEncode" and key == POSITIVE_PROMPT_NODE_ID:
             inputs["text"] = positive_prompt
             node["inputs"] = inputs
-            wrote_prompt = True
+            wrote_positive = True
+        elif class_type == "CLIPTextEncode" and key == NEGATIVE_PROMPT_NODE_ID:
+            inputs["text"] = negative_prompt
+            node["inputs"] = inputs
+            wrote_negative = True
         elif class_type == "KSampler":
             inputs["seed"] = seed
             node["inputs"] = inputs
@@ -73,13 +81,22 @@ def prepare_workflow(
             inputs["image"] = image_name
             node = {**node, "inputs": inputs}
             result[LOAD_IMAGE_NODE_ID] = node
-    if not wrote_prompt and POSITIVE_PROMPT_NODE_ID in result:
+    if not wrote_positive and POSITIVE_PROMPT_NODE_ID in result:
         node = result[POSITIVE_PROMPT_NODE_ID]
         if isinstance(node, dict):
             inputs = dict(node.get("inputs") or {})
             inputs["text"] = positive_prompt
             node = {**node, "inputs": inputs}
             result[POSITIVE_PROMPT_NODE_ID] = node
+    if not wrote_negative and NEGATIVE_PROMPT_NODE_ID in result:
+        node = result[NEGATIVE_PROMPT_NODE_ID]
+        if isinstance(node, dict):
+            inputs = dict(node.get("inputs") or {})
+            inputs["text"] = negative_prompt
+            # Ensure CLIPTextEncode shape if an old ConditioningZeroOut template sneaks in.
+            inputs.setdefault("clip", ["34", 0])
+            node = {**node, "class_type": "CLIPTextEncode", "inputs": inputs}
+            result[NEGATIVE_PROMPT_NODE_ID] = node
     return result
 
 

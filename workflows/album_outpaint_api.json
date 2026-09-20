@@ -1,7 +1,7 @@
 {
   "_meta": {
     "title": "Album art outpaint (Flux fill)",
-    "notes": "API export of the household Flux fill outpaint graph on 192.168.10.31. Requires flux1-fill-dev.safetensors, DualCLIP (clip_l + t5xxl_fp16), and ae.safetensors. The app rewrites LoadImage (17) after upload and injects the positive CLIP prompt (23). ImagePadForOutpaint pads (256/128/256/128) must stay in sync with ComfyUiOutpaintClient.OUTPAINT_PAD_* so the sharp cover can hover over the original region. Measured on real covers: feathering 0 gives the smallest boundary jump (3 vs 20 at feathering 24) because the mask never reaches into the cover."
+    "notes": "API export of the household Flux fill outpaint graph on 192.168.10.31. Requires flux1-fill-dev.safetensors, DualCLIP (clip_l + t5xxl_fp16), and ae.safetensors. The app rewrites LoadImage (17) after upload and injects positive CLIP (23) + negative CLIP (46). ImagePadForOutpaint pads must stay in sync with app layout defaults. Feathering 0 keeps the mask out of the cover."
   },
   "3": {
     "inputs": {
@@ -105,8 +105,9 @@
   },
   "46": {
     "inputs": {
-      "conditioning": ["23", 0]
+      "text": "PLACEHOLDER_NEGATIVE_PROMPT",
+      "clip": ["34", 0]
     },
-    "class_type": "ConditioningZeroOut"
+    "class_type": "CLIPTextEncode"
   }
 }

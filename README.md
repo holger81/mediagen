@@ -105,7 +105,8 @@ uvicorn app.main:app --reload --port 8090
 
 Matches ha_native_dash greatroom wall:
 
-1. Content-hash cache lookup
+1. Content-hash cache lookup (includes layout pads)
 2. Instant local edge pad (Pillow) — sync `200` for uniform/black mattes
 3. Pictorial covers: background Flux Fill (`workflows/album_outpaint_api.json`); clients poll
-4. Quality gate; reject invented mats / hard seams → keep local pad
+4. Flux prompts steer against invented type (positive “no text…”, real negative CLIP encode)
+5. Quality gate; reject invented mats / hard seams → keep local pad

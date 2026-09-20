@@ -12,14 +12,24 @@ OUTPAINT_MAX_PAD = 2048
 OUTPAINT_MAX_OUTPUT_SIDE = 4096
 OUTPAINT_MAX_PIXELS = 16_777_216  # 4096^2
 
-# Intentionally empty — Flux fill extends from edges; instruction prompts hurt quality.
-OUTPAINT_PROMPT = ""
+# Flux Fill: steer margins away from invented type (empty prompt was inventing glyphs).
+OUTPAINT_PROMPT = (
+    "seamless photographic background extension matching the cover edges, "
+    "soft atmosphere, no text, no letters, no words, no typography, "
+    "no logos, no watermark, no signature, no captions"
+)
+OUTPAINT_NEGATIVE_PROMPT = (
+    "text, letters, words, typography, title, caption, logo, watermark, "
+    "signature, calligraphy, alphabet, glyphs, writing, font, "
+    "illegible text, random characters, brand mark"
+)
 
 # Bump when pad strategy / prompt / workflow / hash layout changes.
-OUTPAINT_CACHE_VERSION = "empty-prompt-feather10-layout-v7"
+OUTPAINT_CACHE_VERSION = "no-text-prompt-feather10-layout-v8"
 
 LOAD_IMAGE_NODE_ID = "17"
 POSITIVE_PROMPT_NODE_ID = "23"
+NEGATIVE_PROMPT_NODE_ID = "46"
 WORKFLOW_FILENAME = "album_outpaint_api.json"
 
 # Local pad / quality-gate thresholds (AlbumArtLocalOutpaint).
