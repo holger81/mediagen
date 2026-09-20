@@ -65,6 +65,27 @@ async def test_pictorial_local_fallback_not_requeried(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_incomplete_pictorial_local_requeues_flux(tmp_path: Path) -> None:
+    """Local JPEG without `.done` must not permanently skip Comfy."""
+    workflow = Path(__file__).resolve().parents[1] / "workflows" / "album_outpaint_api.json"
+    cache = MediaCache(tmp_path, max_items=10)
+    comfy = CountingComfy(workflow)
+    service = OutpaintService(cache, comfy, retry_after_s=1)
+    data = _pictorial_png()
+    content_hash = cache.hash_for(data)
+    assert cache.put_by_hash(content_hash, data, source="local") is not None
+    assert not cache.is_done(content_hash)
+
+    first = await service.submit(data)
+    assert isinstance(first, GeneratingStatus)
+    for _ in range(50):
+        await asyncio.sleep(0.05)
+        if isinstance(service.lookup(first.hash), OutpaintResult):
+            break
+    assert comfy.calls == 1
+
+
+@pytest.mark.asyncio
 async def test_same_cover_bytes_hit_without_second_comfy(tmp_path: Path) -> None:
     workflow = Path(__file__).resolve().parents[1] / "workflows" / "album_outpaint_api.json"
     cache = MediaCache(tmp_path, max_items=10)

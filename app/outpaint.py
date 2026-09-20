@@ -104,14 +104,14 @@ class OutpaintService:
             return hit
         if self.cache.is_done(content_hash):
             return hit
-        # Legacy pictorial local without `.done`: keep it (do not wipe). One
-        # Comfy attempt already happened when it was written.
+        # Legacy pictorial local without `.done`: do NOT settle. Older caches (and
+        # orphan JPEGs registered as local) never ran Comfy — returning them here
+        # permanently skipped Flux. Fall through so submit() re-queues generation.
         logger.info(
-            "Keeping settled local pad for pictorial cover %s (no re-queue)",
+            "Incomplete pictorial local for %s (no .done); re-queueing Flux",
             content_hash[:12],
         )
-        self.cache.mark_done(content_hash)
-        return hit
+        return None
 
     async def submit(
         self,

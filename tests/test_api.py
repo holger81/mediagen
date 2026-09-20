@@ -243,13 +243,14 @@ def test_outpaint_pictorial_returns_202_then_ready(client: TestClient) -> None:
     assert cached.headers["X-Outpaint-Source"] == "local"
 
 
-def test_pictorial_stale_local_cache_settles_without_requeue(client: TestClient) -> None:
-    """A prior local pad is kept as settled (one Comfy attempt already happened)."""
+def test_pictorial_stale_local_cache_requeues_flux(client: TestClient) -> None:
+    """A prior local pad without `.done` must re-queue Comfy (legacy incomplete cache)."""
     data = _pictorial_png()
     cache: MediaCache = client.app.state.cache
     content_hash = cache.hash_for(data)
     local_jpeg = _png_bytes((90, 90, 90))
     assert cache.put_by_hash(content_hash, local_jpeg, source="local") is not None
+    assert not cache.is_done(content_hash)
 
     lookup = client.get(f"/v1/image/outpaint/{content_hash}")
     assert lookup.status_code == 200
@@ -259,8 +260,8 @@ def test_pictorial_stale_local_cache_settles_without_requeue(client: TestClient)
         "/v1/image/outpaint",
         files={"image": ("cover.png", data, "image/png")},
     )
-    assert resp.status_code == 200
-    assert resp.headers["X-Outpaint-Source"] == "local"
+    assert resp.status_code == 202
+    assert resp.headers["X-Outpaint-Status"] == "generating"
 
 
 def test_lookup_missing(client: TestClient) -> None:
