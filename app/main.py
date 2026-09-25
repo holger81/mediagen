@@ -10,10 +10,12 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
+from app.admin import router as admin_router
 from app.cache import MediaCache
 from app.comfy_client import ComfyUiOutpaintClient, default_workflow_path
 from app.config import Settings, get_settings
 from app.layout import parse_outpaint_layout, source_size
+from app.log_buffer import install_log_buffer
 from app.outpaint import GeneratingStatus, OutpaintResult, OutpaintService
 
 
@@ -29,6 +31,7 @@ def _workflows_dir(settings: Settings) -> Path:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    install_log_buffer(capacity=settings.admin_log_capacity)
     cache = MediaCache(settings.cache_dir, max_items=settings.cache_max_items)
     comfy = ComfyUiOutpaintClient(
         base_url=settings.comfyui_base_url,
@@ -65,6 +68,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(admin_router)
 
 
 def _layout_headers(layout_result: OutpaintResult | GeneratingStatus) -> dict[str, str]:

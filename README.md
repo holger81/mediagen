@@ -21,6 +21,8 @@ Docker media-generation API. Starts with **image outpaint** (greatroom-wall Flux
 | `OUTPAINT_POLL_TIMEOUT_S` | `180` | Max seconds to wait for Comfy Flux (cold load can exceed 90s) |
 | `OUTPAINT_RETRY_AFTER_S` | `5` | Suggested poll interval when status is `generating` |
 | `CORS_ORIGINS` | `*` | CORS allow list |
+| `ADMIN_TOKEN` | _(empty)_ | If set, `/admin` requires `?token=` or `X-Admin-Token` |
+| `ADMIN_LOG_CAPACITY` | `500` | In-memory log lines kept for the admin UI |
 
 ### Portainer: “failed programming external connectivity”
 
@@ -46,6 +48,10 @@ That error on `mediagen-api-1` almost always means the **host port is already ta
   - **Still generating:** `202` JSON
   - **Unknown:** `404`
 - `GET /health` — API + Comfy reachability
+- `GET /admin` — browser UI: cached outpaint gallery + recent logs (optional `ADMIN_TOKEN`)
+  - `GET /admin/api/entries` — JSON cache listing
+  - `GET /admin/api/logs` — JSON recent log lines
+  - `GET /admin/cache/{sha256}.jpg` — thumbnail/full JPEG without bumping hit count
 
 **Ready (`200`) headers:** `X-Media-Hash`, `X-Cache: hit|miss`, `X-Outpaint-Source: flux|local`, `X-Outpaint-Status: ready`, `X-Outpaint-Pad: L,T,R,B`, `X-Outpaint-Size: WwHh`.
 

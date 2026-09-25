@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.cache import MediaCache
 from app.constants import OUTPAINT_CACHE_VERSION
+from app.layout import OutpaintLayout
 
 
 def test_content_hash_stable(tmp_path: Path) -> None:
@@ -63,3 +64,20 @@ def test_lookup_by_hash(tmp_path: Path) -> None:
     hit = cache.get_by_hash(h, touch=False)
     assert hit is not None
     assert hit.source == "flux"
+
+
+def test_list_entries(tmp_path: Path) -> None:
+    cache = MediaCache(tmp_path, max_items=10)
+    src = b"cover-a"
+    jpeg = b"\xff\xd8\xfffake"
+    put = cache.put(src, jpeg, source="flux")
+    assert put is not None
+    cache.write_layout(put.hash, OutpaintLayout.defaults())
+    cache.mark_done(put.hash)
+    entries = cache.list_entries()
+    assert len(entries) == 1
+    assert entries[0].hash == put.hash
+    assert entries[0].source == "flux"
+    assert entries[0].done is True
+    assert entries[0].pads == OutpaintLayout.defaults().header_pad()
+    assert entries[0].size_bytes == len(jpeg)

@@ -21,6 +21,19 @@ class CacheHit:
     hits: int
 
 
+@dataclass(frozen=True)
+class CacheEntryInfo:
+    hash: str
+    source: str
+    hits: int
+    created_at: float
+    last_access: float
+    size_bytes: int
+    done: bool
+    flux: bool
+    pads: str | None
+
+
 class MediaCache:
     """Disk JPEG cache keyed by canonical image identity with two-tier eviction."""
 
@@ -254,6 +267,44 @@ class MediaCache:
         with self._lock, self._connect() as conn:
             row = conn.execute("SELECT COUNT(*) AS n FROM entries").fetchone()
             return int(row["n"]) if row else 0
+
+    def list_entries(self, *, limit: int = 200, offset: int = 0) -> list[CacheEntryInfo]:
+        """List cache entries newest-access first (for admin UI). Does not bump hits."""
+        limit = max(1, min(int(limit), 1000))
+        offset = max(0, int(offset))
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT hash, source, hits, last_access, created_at
+                FROM entries
+                ORDER BY last_access DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            ).fetchall()
+        out: list[CacheEntryInfo] = []
+        for row in rows:
+            content_hash = str(row["hash"])
+            path = self.file_for(content_hash)
+            try:
+                size = path.stat().st_size if path.is_file() else 0
+            except OSError:
+                size = 0
+            layout = self.read_layout(content_hash)
+            out.append(
+                CacheEntryInfo(
+                    hash=content_hash,
+                    source=str(row["source"]),
+                    hits=int(row["hits"]),
+                    created_at=float(row["created_at"]),
+                    last_access=float(row["last_access"]),
+                    size_bytes=size,
+                    done=self.is_done(content_hash),
+                    flux=(self.cache_dir / f"{content_hash}.flux").is_file(),
+                    pads=layout.header_pad() if layout else None,
+                )
+            )
+        return out
 
     def _enforce_limits(self, conn: sqlite3.Connection) -> None:
         while True:

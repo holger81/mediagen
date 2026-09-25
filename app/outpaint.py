@@ -79,6 +79,9 @@ class OutpaintService:
         task = self._inflight.get(content_hash)
         return task is not None and not task.done()
 
+    def inflight_hashes(self) -> list[str]:
+        return [h for h, task in self._inflight.items() if not task.done()]
+
     def _settled_cache_hit(
         self,
         content_hash: str,

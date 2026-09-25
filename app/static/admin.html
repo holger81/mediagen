@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>mediagen admin</title>
+  <style>
+    :root {
+      --bg: #121418;
+      --panel: #1a1e26;
+      --border: #2a3140;
+      --text: #e6e9ef;
+      --muted: #8b93a7;
+      --accent: #6db3a8;
+      --flux: #c9a227;
+      --local: #7a9bb8;
+      --warn: #d9896a;
+      --err: #e06c75;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 0.75rem 1.5rem;
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, #1c212b 0%, var(--bg) 100%);
+    }
+    header h1 {
+      margin: 0;
+      font-size: 1.35rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    header .meta { color: var(--muted); font-size: 0.9rem; }
+    header .meta strong { color: var(--accent); font-weight: 600; }
+    main {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 1.25rem;
+      padding: 1.25rem 1.5rem 2rem;
+    }
+    @media (min-width: 1100px) {
+      main { grid-template-columns: 1.4fr 1fr; align-items: start; }
+    }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    section h2 {
+      margin: 0;
+      padding: 0.85rem 1rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .toolbar {
+      display: flex;
+      gap: 0.5rem;
+      padding: 0.65rem 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    button {
+      background: #243040;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.35rem 0.7rem;
+      font: inherit;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); color: var(--accent); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 0.85rem;
+      padding: 1rem;
+      max-height: 70vh;
+      overflow: auto;
+    }
+    .card {
+      background: #141820;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .card a.thumb {
+      display: block;
+      aspect-ratio: 16 / 10;
+      background: #0c0e12;
+      overflow: hidden;
+    }
+    .card img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .card .info {
+      padding: 0.55rem 0.65rem 0.7rem;
+      font-size: 0.75rem;
+      line-height: 1.35;
+      color: var(--muted);
+    }
+    .card .hash {
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      color: var(--text);
+      word-break: break-all;
+    }
+    .badge {
+      display: inline-block;
+      padding: 0.1rem 0.4rem;
+      border-radius: 3px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .badge.flux { background: rgba(201, 162, 39, 0.2); color: var(--flux); }
+    .badge.local { background: rgba(122, 155, 184, 0.2); color: var(--local); }
+    .empty {
+      padding: 2rem 1rem;
+      text-align: center;
+      color: var(--muted);
+    }
+    .logs {
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 0.72rem;
+      line-height: 1.45;
+      max-height: 70vh;
+      overflow: auto;
+      padding: 0.75rem 1rem 1rem;
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .logs .line { margin: 0 0 0.35rem; }
+    .logs .ts { color: var(--muted); }
+    .logs .lvl { font-weight: 600; }
+    .logs .lvl.WARNING { color: var(--warn); }
+    .logs .lvl.ERROR, .logs .lvl.CRITICAL { color: var(--err); }
+    .logs .lvl.INFO { color: var(--accent); }
+    .logs .lvl.DEBUG { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>mediagen</h1>
+    <div class="meta" id="status">loading…</div>
+  </header>
+  <main>
+    <section>
+      <h2>Cached outpaints</h2>
+      <div class="toolbar">
+        <button type="button" id="refresh-entries">Refresh</button>
+      </div>
+      <div class="grid" id="entries"><div class="empty">Loading cache…</div></div>
+    </section>
+    <section>
+      <h2>Recent logs</h2>
+      <div class="toolbar">
+        <button type="button" id="refresh-logs">Refresh</button>
+      </div>
+      <pre class="logs" id="logs">Loading logs…</pre>
+    </section>
+  </main>
+  <script>
+    const q = new URLSearchParams(location.search);
+    const token = q.get("token") || "";
+    const authQs = token ? `?token=${encodeURIComponent(token)}` : "";
+    const authAmp = token ? `&token=${encodeURIComponent(token)}` : "";
+
+    function fmtTime(epoch) {
+      if (!epoch) return "—";
+      try {
+        return new Date(epoch * 1000).toLocaleString();
+      } catch {
+        return "—";
+      }
+    }
+
+    function fmtBytes(n) {
+      if (n < 1024) return n + " B";
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+      return (n / (1024 * 1024)).toFixed(1) + " MB";
+    }
+
+    async function loadStatus() {
+      const r = await fetch("/health");
+      const j = await r.json();
+      const el = document.getElementById("status");
+      el.innerHTML =
+        `status <strong>${j.status}</strong> · comfy ` +
+        `<strong>${j.comfyui ? "up" : "down"}</strong> · cache ` +
+        `<strong>${j.cache_items}</strong> / ${j.cache_max_items}`;
+    }
+
+    async function loadEntries() {
+      const el = document.getElementById("entries");
+      try {
+        const r = await fetch(`/admin/api/entries${authQs}`);
+        if (!r.ok) throw new Error(await r.text());
+        const j = await r.json();
+        if (!j.entries.length) {
+          el.innerHTML = '<div class="empty">No cached outpaints yet.</div>';
+          return;
+        }
+        el.innerHTML = j.entries.map((e) => {
+          const src = (e.source || "local").toLowerCase();
+          const badge = src === "flux" ? "flux" : "local";
+          const img = `/admin/cache/${e.hash}.jpg${authQs}`;
+          const full = `/v1/image/outpaint/${e.hash}`;
+          return `
+            <article class="card">
+              <a class="thumb" href="${full}" target="_blank" rel="noopener">
+                <img src="${img}" alt="${e.hash.slice(0, 12)}" loading="lazy" />
+              </a>
+              <div class="info">
+                <div><span class="badge ${badge}">${src}</span>
+                  ${e.done ? " · done" : ""}${e.flux ? " · .flux" : ""}</div>
+                <div class="hash">${e.hash.slice(0, 12)}…</div>
+                <div>${e.hits} hits · ${fmtBytes(e.size_bytes)}</div>
+                <div>pads ${e.pads || "—"}</div>
+                <div>access ${fmtTime(e.last_access)}</div>
+              </div>
+            </article>`;
+        }).join("");
+      } catch (err) {
+        el.innerHTML = `<div class="empty">Failed to load: ${err.message}</div>`;
+      }
+    }
+
+    async function loadLogs() {
+      const el = document.getElementById("logs");
+      try {
+        const r = await fetch(`/admin/api/logs?limit=200${authAmp}`);
+        if (!r.ok) throw new Error(await r.text());
+        const j = await r.json();
+        if (!j.lines.length) {
+          el.textContent = "No log lines yet (activity will appear here).";
+          return;
+        }
+        el.innerHTML = j.lines.map((l) =>
+          `<div class="line"><span class="ts">${l.ts}</span> ` +
+          `<span class="lvl ${l.level}">${l.level}</span> ${escapeHtml(l.message)}</div>`
+        ).join("");
+        el.scrollTop = el.scrollHeight;
+      } catch (err) {
+        el.textContent = "Failed to load logs: " + err.message;
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    async function refreshAll() {
+      await Promise.all([loadStatus(), loadEntries(), loadLogs()]);
+    }
+
+    document.getElementById("refresh-entries").onclick = loadEntries;
+    document.getElementById("refresh-logs").onclick = loadLogs;
+    refreshAll();
+    setInterval(refreshAll, 8000);
+  </script>
+</body>
+</html>

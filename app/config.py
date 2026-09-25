@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     outpaint_poll_timeout_s: float = 180.0
     outpaint_retry_after_s: int = 5
     cors_origins: str = "*"
+    # Empty = open admin UI (LAN trust). Set to require ?token= or X-Admin-Token.
+    admin_token: str = ""
+    admin_log_capacity: int = 500
 
 
 @lru_cache
