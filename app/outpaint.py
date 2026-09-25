@@ -87,6 +87,16 @@ class OutpaintService:
     def inflight_hashes(self) -> list[str]:
         return [h for h, task in self._inflight.items() if not task.done()]
 
+    def cancel_inflight(self, content_hash: str) -> bool:
+        """Cancel a running job for this hash (best-effort). Returns True if cancelled."""
+        task = self._inflight.get(content_hash)
+        if task is None or task.done():
+            return False
+        task.cancel()
+        self._inflight.pop(content_hash, None)
+        self._inflight_meta.pop(content_hash, None)
+        return True
+
     def _settled_flux_hit(
         self,
         content_hash: str,

@@ -97,6 +97,28 @@ async def admin_logs(
     )
 
 
+@router.delete("/admin/api/entries/{sha256}")
+async def admin_delete_entry(
+    sha256: str,
+    request: Request,
+    token: str | None = Query(default=None),
+) -> JSONResponse:
+    _check_admin(request, token)
+    digest = sha256.lower()
+    if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+        raise HTTPException(status_code=400, detail="invalid sha256")
+    cache: MediaCache = request.app.state.cache
+    service: OutpaintService = request.app.state.outpaint
+    service.cancel_inflight(digest)
+    removed = cache.invalidate(digest)
+    # Also clear a lone .done / .pads / .flux if the JPEG was already gone.
+    if not removed:
+        cache.done_marker_for(digest).unlink(missing_ok=True)
+        cache.pads_marker_for(digest).unlink(missing_ok=True)
+        (cache.cache_dir / f"{digest}.flux").unlink(missing_ok=True)
+    return JSONResponse({"ok": True, "hash": digest, "removed": removed})
+
+
 @router.get("/admin/cache/{sha256}.jpg")
 async def admin_cache_jpeg(
     sha256: str,

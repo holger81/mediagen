@@ -51,6 +51,7 @@ That error on `mediagen-api-1` almost always means the **host port is already ta
 - `GET /health` — API + Comfy reachability
 - `GET /admin` — browser UI: cached outpaint gallery + recent logs (optional `ADMIN_TOKEN`)
   - `GET /admin/api/entries` — JSON cache listing
+  - `DELETE /admin/api/entries/{sha256}` — remove JPEG + markers (allows Flux retry)
   - `GET /admin/api/logs` — JSON recent log lines
   - `GET /admin/cache/{sha256}.jpg` — thumbnail/full JPEG without bumping hit count
 

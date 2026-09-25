@@ -134,6 +134,22 @@
     }
     .badge.flux { background: rgba(201, 162, 39, 0.2); color: var(--flux); }
     .badge.local { background: rgba(122, 155, 184, 0.2); color: var(--local); }
+    .card .actions {
+      display: flex;
+      gap: 0.4rem;
+      margin-top: 0.45rem;
+    }
+    button.danger {
+      background: rgba(224, 108, 117, 0.15);
+      border-color: rgba(224, 108, 117, 0.45);
+      color: var(--err);
+      font-size: 0.72rem;
+      padding: 0.25rem 0.5rem;
+    }
+    button.danger:hover {
+      border-color: var(--err);
+      background: rgba(224, 108, 117, 0.28);
+    }
     .empty {
       padding: 2rem 1rem;
       text-align: center;
@@ -227,7 +243,7 @@
           const img = `/admin/cache/${e.hash}.jpg${authQs}`;
           const full = `/v1/image/outpaint/${e.hash}`;
           return `
-            <article class="card">
+            <article class="card" data-hash="${e.hash}">
               <a class="thumb" href="${full}" target="_blank" rel="noopener">
                 <img src="${img}" alt="${e.hash.slice(0, 12)}" loading="lazy" />
               </a>
@@ -238,12 +254,32 @@
                 <div>${e.hits} hits · ${fmtBytes(e.size_bytes)}</div>
                 <div>pads ${e.pads || "—"}</div>
                 <div>access ${fmtTime(e.last_access)}</div>
+                <div class="actions">
+                  <button type="button" class="danger" data-delete="${e.hash}">Delete</button>
+                </div>
               </div>
             </article>`;
         }).join("");
+        el.querySelectorAll("[data-delete]").forEach((btn) => {
+          btn.addEventListener("click", () => deleteEntry(btn.getAttribute("data-delete")));
+        });
       } catch (err) {
         el.innerHTML = `<div class="empty">Failed to load: ${err.message}</div>`;
       }
+    }
+
+    async function deleteEntry(hash) {
+      if (!hash) return;
+      const short = hash.slice(0, 12);
+      if (!confirm(`Delete cached outpaint ${short}…?\nThis also clears .done so Flux can run again.`)) {
+        return;
+      }
+      const r = await fetch(`/admin/api/entries/${hash}${authQs}`, { method: "DELETE" });
+      if (!r.ok) {
+        alert("Delete failed: " + (await r.text()));
+        return;
+      }
+      await Promise.all([loadStatus(), loadEntries()]);
     }
 
     async function loadLogs() {

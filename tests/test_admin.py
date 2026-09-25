@@ -115,6 +115,13 @@ def test_admin_page_and_apis(client: TestClient) -> None:
     messages = [line["message"] for line in logs.json()["lines"]]
     assert any("admin-log-probe" in m for m in messages)
 
+    deleted = client.delete(f"/admin/api/entries/{content_hash}")
+    assert deleted.status_code == 200
+    assert deleted.json()["ok"] is True
+    assert client.get(f"/admin/cache/{content_hash}.jpg").status_code == 404
+    entries_after = client.get("/admin/api/entries").json()
+    assert all(e["hash"] != content_hash for e in entries_after["entries"])
+
 
 def test_admin_token_required(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CACHE_DIR", str(tmp_path / "cache"))
