@@ -44,8 +44,13 @@ def test_prepare_workflow_rewrites_pads() -> None:
 
 def test_prepare_workflow_injects_no_text_prompts() -> None:
     prepared = prepare_workflow(WORKFLOW, image_name="x.png", seed=1)
-    assert "no text" in prepared["23"]["inputs"]["text"].lower()
-    assert "text" in prepared["46"]["inputs"]["text"].lower()
+    positive = prepared["23"]["inputs"]["text"].lower()
+    negative = prepared["46"]["inputs"]["text"].lower()
+    assert "no text" in positive
+    assert "no border" in positive or "filling the canvas" in positive
+    assert "text" in negative
+    assert "border" in negative
+    assert "polaroid" in negative
     # Negative is a real encode, not ConditioningZeroOut.
     assert prepared["46"]["class_type"] == "CLIPTextEncode"
     assert prepared["38"]["inputs"]["negative"] == ["46", 0]
