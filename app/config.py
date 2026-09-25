@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     outpaint_poll_interval_s: float = 1.5
     outpaint_poll_timeout_s: float = 180.0
     outpaint_retry_after_s: int = 5
+    # When True, reject Flux pads that fail seam/mismatch checks (no JPEG, .done only).
+    # Default off: keep Comfy output so good-looking pads are not sealed as failures.
+    flux_quality_gate: bool = False
     cors_origins: str = "*"
     # Empty = open admin UI (LAN trust). Set to require ?token= or X-Admin-Token.
     admin_token: str = ""

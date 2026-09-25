@@ -42,10 +42,12 @@ class OutpaintService:
         comfy: ComfyUiOutpaintClient,
         *,
         retry_after_s: int = 5,
+        flux_quality_gate: bool = False,
     ) -> None:
         self.cache = cache
         self.comfy = comfy
         self.retry_after_s = max(1, retry_after_s)
+        self.flux_quality_gate = flux_quality_gate
         self._inflight: dict[str, asyncio.Task[None]] = {}
         self._inflight_meta: dict[str, tuple[OutpaintLayout, int, int]] = {}
         self._lock = asyncio.Lock()
@@ -257,8 +259,10 @@ class OutpaintService:
             return hit
 
         flux = await self.comfy.outpaint(source_bytes, layout=layout)
-        accepted = (
-            accept_flux_pad(
+        if not flux:
+            accepted = None
+        elif self.flux_quality_gate:
+            accepted = accept_flux_pad(
                 flux,
                 source_bytes,
                 layout.pad_left,
@@ -266,9 +270,8 @@ class OutpaintService:
                 layout.pad_right,
                 layout.pad_bottom,
             )
-            if flux
-            else None
-        )
+        else:
+            accepted = flux
         if not accepted:
             self.cache.mark_done(content_hash)
             if flux:

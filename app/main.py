@@ -46,6 +46,7 @@ async def lifespan(app: FastAPI):
         cache,
         comfy,
         retry_after_s=settings.outpaint_retry_after_s,
+        flux_quality_gate=settings.flux_quality_gate,
     )
     try:
         yield

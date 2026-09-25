@@ -20,6 +20,7 @@ Docker media-generation API. Starts with **image outpaint** (greatroom-wall Flux
 | `COMFYUI_BASE_URL` | `http://192.168.10.31:8188` | Existing ComfyUI HTTP API |
 | `OUTPAINT_POLL_TIMEOUT_S` | `180` | Max seconds to wait for Comfy Flux (cold load can exceed 90s) |
 | `OUTPAINT_RETRY_AFTER_S` | `5` | Suggested poll interval when status is `generating` |
+| `FLUX_QUALITY_GATE` | `0` | `1`/`true` enables Flux pad quality gate (reject invented mats / hard seams → `.done` only, later POST → 502). Default off keeps Comfy JPEG/SQLite even when checks fail |
 | `CORS_ORIGINS` | `*` | CORS allow list |
 | `ADMIN_TOKEN` | _(empty)_ | If set, `/admin` requires `?token=` or `X-Admin-Token` |
 | `ADMIN_LOG_CAPACITY` | `500` | In-memory log lines kept for the admin UI |
@@ -95,6 +96,8 @@ file /tmp/out.jpg
   (edge pad belongs on the client if needed)
 - After a finished attempt (success or hard failure), a `.done` marker is written so
   the same cover is not re-queued on every playlist play
+- Prior quality-gate rejects leave a lone `{hash}.done` with no JPEG; clearing that
+  marker (admin delete, or `rm` the file) allows Flux to run again after redeploy
 - Files under `CACHE_DIR` as `{hash}.jpg` + `{hash}.pads` + `{hash}.flux` + SQLite hit index
 - Eviction: single-hit (probation) entries first; hot keys (`hits >= 2`) kept longer
 - Single-flight per hash: concurrent POSTs share one Comfy job and all get `202`
@@ -114,4 +117,4 @@ uvicorn app.main:app --reload --port 8090
 1. Content-hash cache lookup (includes layout pads) — Flux hits only
 2. Background Flux Fill (`workflows/album_outpaint_api.json`); clients poll
 3. Flux prompts steer against invented type (positive “no text…”, real negative CLIP encode)
-4. Quality gate; reject invented mats / hard seams → no image stored (`.done`, later POST → 502)
+4. Optional quality gate (`FLUX_QUALITY_GATE=1`): reject invented mats / hard seams → no image stored (`.done`, later POST → 502). Default off — Comfy output is cached as Flux

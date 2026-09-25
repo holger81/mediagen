@@ -22,6 +22,9 @@ services:
       COMFYUI_BASE_URL: ${COMFYUI_BASE_URL:-http://192.168.10.31:8188}
       OUTPAINT_POLL_TIMEOUT_S: ${OUTPAINT_POLL_TIMEOUT_S:-180}
       OUTPAINT_RETRY_AFTER_S: ${OUTPAINT_RETRY_AFTER_S:-5}
+      # 0/false (default): keep Flux JPEG even if pad quality checks fail.
+      # 1/true: reject bad pads (seal .done, no JPEG → later POST 502).
+      FLUX_QUALITY_GATE: ${FLUX_QUALITY_GATE:-0}
       WORKFLOWS_DIR: /app/workflows
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
     volumes:
