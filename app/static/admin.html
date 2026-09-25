@@ -222,8 +222,8 @@
           return;
         }
         el.innerHTML = j.entries.map((e) => {
-          const src = (e.source || "local").toLowerCase();
-          const badge = src === "flux" ? "flux" : "local";
+          const src = (e.source || "flux").toLowerCase();
+          const badge = src === "flux" ? "flux" : "other";
           const img = `/admin/cache/${e.hash}.jpg${authQs}`;
           const full = `/v1/image/outpaint/${e.hash}`;
           return `

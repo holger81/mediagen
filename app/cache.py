@@ -17,7 +17,7 @@ from app.layout import OutpaintLayout
 class CacheHit:
     hash: str
     path: Path
-    source: str  # flux | local
+    source: str  # flux
     hits: int
 
 
@@ -129,7 +129,7 @@ class MediaCache:
             return None
 
     def mark_done(self, content_hash: str) -> None:
-        """Mark a generation attempt finished (Flux or local fallback)."""
+        """Mark a generation attempt finished (success or hard failure)."""
         with self._lock:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             self.done_marker_for(content_hash).touch()
@@ -158,7 +158,7 @@ class MediaCache:
                     (content_hash,),
                 ).fetchone()
                 if row is None:
-                    # Orphan file — register as local with 1 hit.
+                    # Orphan file — register as flux with 1 hit (legacy unknowns).
                     now = time.time()
                     conn.execute(
                         """
@@ -170,12 +170,12 @@ class MediaCache:
                             content_hash,
                             self.media_type,
                             self.operation,
-                            "local",
+                            "flux",
                             now,
                             now,
                         ),
                     )
-                    return CacheHit(hash=content_hash, path=path, source="local", hits=1)
+                    return CacheHit(hash=content_hash, path=path, source="flux", hits=1)
                 hits = int(row["hits"])
                 source = str(row["source"])
                 if touch:

@@ -1,4 +1,4 @@
-"""Outpaint orchestration: cache hit sync; miss starts background job (202/poll)."""
+"""Outpaint orchestration: Flux-only cache hit sync; miss starts background job (202/poll)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from app.cache import MediaCache
 from app.comfy_client import ComfyUiOutpaintClient
 from app.layout import OutpaintLayout
-from app.local_pad import accept_flux_pad, has_uniform_edges, pad_from_edges
+from app.local_pad import accept_flux_pad
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class OutpaintResult:
     hash: str
     bytes: bytes
-    source: str  # flux | local
+    source: str  # flux
     cache: str  # hit | miss
     layout: OutpaintLayout
     src_w: int
@@ -62,13 +62,18 @@ class OutpaintService:
         hit = self.cache.get_by_hash(content_hash, touch=touch)
         if hit is None:
             return None
+        if hit.source != "flux":
+            # Legacy local pads are not served — drop so Flux can run.
+            logger.info("Dropping non-flux cache entry %s (%s)", content_hash[:12], hit.source)
+            self.cache.invalidate(content_hash)
+            return None
         data = hit.path.read_bytes()
         if not data:
             return None
         return OutpaintResult(
             hash=hit.hash,
             bytes=data,
-            source=hit.source,
+            source="flux",
             cache="hit",
             layout=layout,
             src_w=src_w,
@@ -82,39 +87,17 @@ class OutpaintService:
     def inflight_hashes(self) -> list[str]:
         return [h for h, task in self._inflight.items() if not task.done()]
 
-    def _settled_cache_hit(
+    def _settled_flux_hit(
         self,
         content_hash: str,
-        source_bytes: bytes,
         *,
         touch: bool,
         layout: OutpaintLayout,
         src_w: int,
         src_h: int,
     ) -> OutpaintResult | None:
-        """Return a finished cache entry — never re-queue the same cover forever.
-
-        Flux results are always final. Local pads are final for uniform mattes,
-        and also final after a generation attempt (``.done`` marker) so a rejected
-        or timed-out Flux does not restart on every playlist play.
-        """
-        hit = self._hit_result(content_hash, touch=touch, layout=layout, src_w=src_w, src_h=src_h)
-        if hit is None:
-            return None
-        if hit.source == "flux":
-            return hit
-        if has_uniform_edges(source_bytes):
-            return hit
-        if self.cache.is_done(content_hash):
-            return hit
-        # Legacy pictorial local without `.done`: do NOT settle. Older caches (and
-        # orphan JPEGs registered as local) never ran Comfy — returning them here
-        # permanently skipped Flux. Fall through so submit() re-queues generation.
-        logger.info(
-            "Incomplete pictorial local for %s (no .done); re-queueing Flux",
-            content_hash[:12],
-        )
-        return None
+        """Return a finished Flux cache entry only."""
+        return self._hit_result(content_hash, touch=touch, layout=layout, src_w=src_w, src_h=src_h)
 
     async def submit(
         self,
@@ -124,7 +107,7 @@ class OutpaintService:
         src_w: int | None = None,
         src_h: int | None = None,
     ) -> OutpaintResult | GeneratingStatus:
-        """Cache hit → result. Uniform local-only → sync result. Else start job → generating."""
+        """Flux cache hit → result. Else start Comfy job → generating."""
         if not source_bytes:
             raise ValueError("empty image")
         pads = layout if layout is not None else OutpaintLayout.defaults()
@@ -135,28 +118,24 @@ class OutpaintService:
         pads.validate_against_source(src_w, src_h)
         content_hash = self.cache.hash_for(source_bytes, layout=pads)
 
-        hit = self._settled_cache_hit(
-            content_hash,
-            source_bytes,
-            touch=True,
-            layout=pads,
-            src_w=src_w,
-            src_h=src_h,
+        hit = self._settled_flux_hit(
+            content_hash, touch=True, layout=pads, src_w=src_w, src_h=src_h
         )
         if hit is not None:
             return hit
 
+        # Prior Flux attempt finished without a usable image — do not spam Comfy.
+        if self.cache.is_done(content_hash):
+            raise RuntimeError("flux outpaint failed")
+
         async with self._lock:
-            hit = self._settled_cache_hit(
-                content_hash,
-                source_bytes,
-                touch=True,
-                layout=pads,
-                src_w=src_w,
-                src_h=src_h,
+            hit = self._settled_flux_hit(
+                content_hash, touch=True, layout=pads, src_w=src_w, src_h=src_h
             )
             if hit is not None:
                 return hit
+            if self.cache.is_done(content_hash):
+                raise RuntimeError("flux outpaint failed")
             if self.is_generating(content_hash):
                 return GeneratingStatus(
                     hash=content_hash,
@@ -164,12 +143,6 @@ class OutpaintService:
                     layout=pads,
                     src_w=src_w,
                     src_h=src_h,
-                )
-
-            # Fast path: uniform/black mattes only need local pad — finish sync.
-            if has_uniform_edges(source_bytes):
-                return await self._generate(
-                    source_bytes, content_hash, layout=pads, src_w=src_w, src_h=src_h
                 )
 
             task = asyncio.create_task(
@@ -187,7 +160,7 @@ class OutpaintService:
             )
 
     def lookup(self, content_hash: str) -> OutpaintResult | GeneratingStatus | None:
-        """Ready result, generating status, or None if unknown."""
+        """Ready Flux result, generating status, or None if unknown/failed."""
         meta = self._inflight_meta.get(content_hash)
         stored_layout = self.cache.read_layout(content_hash)
         if meta:
@@ -200,7 +173,7 @@ class OutpaintService:
             src_w, src_h = 0, 0
 
         hit = self.cache.get_by_hash(content_hash, touch=True)
-        if hit is not None:
+        if hit is not None and hit.source == "flux":
             data = hit.path.read_bytes()
             if data:
                 if src_w <= 0 or src_h <= 0:
@@ -218,7 +191,7 @@ class OutpaintService:
                 return OutpaintResult(
                     hash=hit.hash,
                     bytes=data,
-                    source=hit.source,
+                    source="flux",
                     cache="hit",
                     layout=layout,
                     src_w=src_w,
@@ -249,6 +222,8 @@ class OutpaintService:
             )
         except Exception:
             logger.exception("Outpaint job failed for %s", content_hash[:12])
+            # Prevent infinite Comfy re-queue on repeated playlist plays.
+            self.cache.mark_done(content_hash)
         finally:
             async with self._lock:
                 current = self._inflight.get(content_hash)
@@ -265,61 +240,43 @@ class OutpaintService:
         src_w: int,
         src_h: int,
     ) -> OutpaintResult:
-        hit = self._hit_result(content_hash, touch=False, layout=layout, src_w=src_w, src_h=src_h)
-        if hit is not None and (
-            hit.source == "flux"
-            or has_uniform_edges(source_bytes)
-            or self.cache.is_done(content_hash)
-        ):
+        hit = self._settled_flux_hit(
+            content_hash, touch=False, layout=layout, src_w=src_w, src_h=src_h
+        )
+        if hit is not None:
             return hit
 
-        local = await asyncio.to_thread(
-            pad_from_edges,
-            source_bytes,
-            layout.pad_left,
-            layout.pad_top,
-            layout.pad_right,
-            layout.pad_bottom,
-        )
-        if local is None:
-            raise RuntimeError("local pad failed")
-
-        source = "local"
-        result_bytes = local
-
-        if not has_uniform_edges(source_bytes):
-            flux = await self.comfy.outpaint(source_bytes, layout=layout)
-            accepted = (
-                accept_flux_pad(
-                    flux,
-                    source_bytes,
-                    layout.pad_left,
-                    layout.pad_top,
-                    layout.pad_right,
-                    layout.pad_bottom,
-                )
-                if flux
-                else None
+        flux = await self.comfy.outpaint(source_bytes, layout=layout)
+        accepted = (
+            accept_flux_pad(
+                flux,
+                source_bytes,
+                layout.pad_left,
+                layout.pad_top,
+                layout.pad_right,
+                layout.pad_bottom,
             )
-            if accepted:
-                result_bytes = accepted
-                source = "flux"
-            elif flux:
-                logger.info("Rejected Flux pad for %s; keeping local", content_hash[:12])
+            if flux
+            else None
+        )
+        if not accepted:
+            self.cache.mark_done(content_hash)
+            if flux:
+                logger.info("Rejected Flux pad for %s", content_hash[:12])
+            raise RuntimeError("flux outpaint failed")
 
-        stored = self.cache.put_by_hash(content_hash, result_bytes, source=source)
+        stored = self.cache.put_by_hash(content_hash, accepted, source="flux")
         if stored is None:
+            self.cache.mark_done(content_hash)
             raise RuntimeError("cache write failed")
         self.cache.write_layout(content_hash, layout)
-        if source == "flux":
-            (self.cache.cache_dir / f"{content_hash}.flux").touch()
-        # Always mark done so pictorial local fallbacks are not re-queued forever.
+        (self.cache.cache_dir / f"{content_hash}.flux").touch()
         self.cache.mark_done(content_hash)
 
         return OutpaintResult(
             hash=content_hash,
-            bytes=result_bytes,
-            source=source,
+            bytes=accepted,
+            source="flux",
             cache="miss",
             layout=layout,
             src_w=src_w,

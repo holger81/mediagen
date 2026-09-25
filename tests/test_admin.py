@@ -4,17 +4,31 @@ from __future__ import annotations
 
 import io
 import logging
+import time
 from pathlib import Path
 
 import pytest
 from app.cache import MediaCache
 from app.comfy_client import ComfyUiOutpaintClient
 from app.config import get_settings
+from app.layout import OutpaintLayout
 from app.log_buffer import MemoryLogHandler, install_log_buffer
 from app.main import app
 from app.outpaint import OutpaintService
 from fastapi.testclient import TestClient
 from PIL import Image
+
+
+def _fake_flux_jpeg(source_bytes: bytes, layout=None) -> bytes:
+    pads = layout or OutpaintLayout.defaults()
+    src = Image.open(io.BytesIO(source_bytes)).convert("RGB")
+    out_w = src.width + pads.pad_left + pads.pad_right
+    out_h = src.height + pads.pad_top + pads.pad_bottom
+    canvas = Image.new("RGB", (out_w, out_h), src.getpixel((0, 0)))
+    canvas.paste(src, (pads.pad_left, pads.pad_top))
+    buf = io.BytesIO()
+    canvas.save(buf, format="JPEG", quality=92)
+    return buf.getvalue()
 
 
 @pytest.fixture()
@@ -25,13 +39,17 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("ADMIN_TOKEN", "")
     get_settings.cache_clear()
     install_log_buffer(capacity=100)
+    monkeypatch.setattr(
+        "app.outpaint.accept_flux_pad",
+        lambda flux, source, *a, **k: flux if flux else None,
+    )
 
     class FakeComfy(ComfyUiOutpaintClient):
         async def health(self) -> bool:
             return False
 
         async def outpaint(self, source_bytes: bytes, *, layout=None) -> bytes | None:
-            return None
+            return _fake_flux_jpeg(source_bytes, layout)
 
     with TestClient(app) as test_client:
         settings = get_settings()
@@ -65,8 +83,16 @@ def test_admin_page_and_apis(client: TestClient) -> None:
         "/v1/image/outpaint",
         files={"image": ("cover.png", data, "image/png")},
     )
-    assert resp.status_code == 200
-    content_hash = resp.headers["X-Media-Hash"]
+    assert resp.status_code == 202
+    content_hash = resp.json()["hash"]
+    ready = None
+    for _ in range(60):
+        poll = client.get(f"/v1/image/outpaint/{content_hash}")
+        if poll.status_code == 200:
+            ready = poll
+            break
+        time.sleep(0.05)
+    assert ready is not None
 
     page = client.get("/admin")
     assert page.status_code == 200

@@ -25,7 +25,7 @@ OUTPAINT_NEGATIVE_PROMPT = (
 )
 
 # Bump when pad strategy / prompt / workflow / hash layout changes.
-OUTPAINT_CACHE_VERSION = "no-text-prompt-feather10-layout-v8"
+OUTPAINT_CACHE_VERSION = "no-text-prompt-feather10-flux-only-v9"
 
 LOAD_IMAGE_NODE_ID = "17"
 POSITIVE_PROMPT_NODE_ID = "23"

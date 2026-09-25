@@ -41,19 +41,20 @@ That error on `mediagen-api-1` almost always means the **host port is already ta
   - **Pads form:** `pad_left`, `pad_top`, `pad_right`, `pad_bottom` (all four required)
   - **Canvas form:** `out_width`, `out_height`, `x`, `y` (place unscaled source at `x,y`; pads derived)
   - Do not mix forms. Translate only — source is never resized.
-  - **Cache hit / fast local-only (uniform edges):** `200` JPEG
+  - **Cache hit (Flux):** `200` JPEG
   - **Generation started (or already in flight):** `202 Accepted` JSON
+  - **Prior Flux failure for this hash:** `502`
 - `GET /v1/image/outpaint/{sha256}` — poll by content hash (hash includes layout)
   - **Ready:** `200` JPEG
   - **Still generating:** `202` JSON
-  - **Unknown:** `404`
+  - **Unknown / failed without image:** `404`
 - `GET /health` — API + Comfy reachability
 - `GET /admin` — browser UI: cached outpaint gallery + recent logs (optional `ADMIN_TOKEN`)
   - `GET /admin/api/entries` — JSON cache listing
   - `GET /admin/api/logs` — JSON recent log lines
   - `GET /admin/cache/{sha256}.jpg` — thumbnail/full JPEG without bumping hit count
 
-**Ready (`200`) headers:** `X-Media-Hash`, `X-Cache: hit|miss`, `X-Outpaint-Source: flux|local`, `X-Outpaint-Status: ready`, `X-Outpaint-Pad: L,T,R,B`, `X-Outpaint-Size: WwHh`.
+**Ready (`200`) headers:** `X-Media-Hash`, `X-Cache: hit|miss`, `X-Outpaint-Source: flux`, `X-Outpaint-Status: ready`, `X-Outpaint-Pad: L,T,R,B`, `X-Outpaint-Size: WwHh`.
 
 **Generating (`202`) body + headers:**
 
@@ -89,11 +90,11 @@ file /tmp/out.jpg
 
 - Key: `sha256(version || pads:L,T,R,B || decoded RGB fingerprint)` — same cover with
   different layout is a different cache entry
-- After each generation attempt (Flux **or** local fallback), a `.done` marker is
-  written — pictorial local pads are **not** wiped and re-queued on every play
-  (this was regenerating Comfy jobs like `ha_album_outpaint_00367_` /
-  `00420_` for the same cover)
-- Files under `CACHE_DIR` as `{hash}.jpg` + `{hash}.pads` + SQLite hit index
+- Only **Flux** results are cached. There is no server-side local/Pillow pad fallback
+  (edge pad belongs on the client if needed)
+- After a finished attempt (success or hard failure), a `.done` marker is written so
+  the same cover is not re-queued on every playlist play
+- Files under `CACHE_DIR` as `{hash}.jpg` + `{hash}.pads` + `{hash}.flux` + SQLite hit index
 - Eviction: single-hit (probation) entries first; hot keys (`hits >= 2`) kept longer
 - Single-flight per hash: concurrent POSTs share one Comfy job and all get `202`
 
@@ -109,10 +110,7 @@ uvicorn app.main:app --reload --port 8090
 
 ## Outpaint pipeline
 
-Matches ha_native_dash greatroom wall:
-
-1. Content-hash cache lookup (includes layout pads)
-2. Instant local edge pad (Pillow) — sync `200` for uniform/black mattes
-3. Pictorial covers: background Flux Fill (`workflows/album_outpaint_api.json`); clients poll
-4. Flux prompts steer against invented type (positive “no text…”, real negative CLIP encode)
-5. Quality gate; reject invented mats / hard seams → keep local pad
+1. Content-hash cache lookup (includes layout pads) — Flux hits only
+2. Background Flux Fill (`workflows/album_outpaint_api.json`); clients poll
+3. Flux prompts steer against invented type (positive “no text…”, real negative CLIP encode)
+4. Quality gate; reject invented mats / hard seams → no image stored (`.done`, later POST → 502)
