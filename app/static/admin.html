@@ -42,6 +42,53 @@
     }
     header .meta { color: var(--muted); font-size: 0.9rem; }
     header .meta strong { color: var(--accent); font-weight: 600; }
+    header .controls {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+    .toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.85rem;
+      color: var(--muted);
+      user-select: none;
+    }
+    .toggle input {
+      appearance: none;
+      width: 2.4rem;
+      height: 1.25rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: #243040;
+      position: relative;
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .toggle input::after {
+      content: "";
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 0.9rem;
+      height: 0.9rem;
+      border-radius: 50%;
+      background: var(--muted);
+      transition: transform 0.15s ease, background 0.15s ease;
+    }
+    .toggle input:checked {
+      background: rgba(109, 179, 168, 0.25);
+      border-color: var(--accent);
+    }
+    .toggle input:checked::after {
+      transform: translateX(1.05rem);
+      background: var(--accent);
+    }
+    .toggle .label-on { color: var(--accent); font-weight: 600; }
+    .toggle .label-off { color: var(--muted); }
     main {
       display: grid;
       grid-template-columns: 1fr;
@@ -50,6 +97,42 @@
     }
     @media (min-width: 1100px) {
       main { grid-template-columns: 1.4fr 1fr; align-items: start; }
+      .activity-section { grid-column: 1 / -1; }
+    }
+    .activity {
+      padding: 0.75rem 1rem 1rem;
+      max-height: 28vh;
+      overflow: auto;
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 0.75rem;
+      line-height: 1.45;
+    }
+    .activity .job {
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.65rem 0.75rem;
+      margin-bottom: 0.55rem;
+      background: #141820;
+    }
+    .activity .job.current { border-color: var(--accent); }
+    .activity .job.error { border-color: rgba(224, 108, 117, 0.5); }
+    .activity .row { color: var(--muted); }
+    .activity .row strong { color: var(--text); font-weight: 600; }
+    .activity .phase {
+      display: inline-block;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-size: 0.68rem;
+      font-weight: 700;
+      color: var(--accent);
+      margin-right: 0.4rem;
+    }
+    .activity .phase.error { color: var(--err); }
+    .activity .prompt {
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin-top: 0.25rem;
+      color: var(--muted);
     }
     section {
       background: var(--panel);
@@ -179,8 +262,21 @@
   <header>
     <h1>mediagen</h1>
     <div class="meta" id="status">loading…</div>
+    <div class="controls">
+      <label class="toggle" title="When on, reject Flux pads that fail seam/mismatch checks">
+        <input type="checkbox" id="quality-gate" />
+        <span>Quality gate <span id="quality-gate-state" class="label-off">off</span></span>
+      </label>
+    </div>
   </header>
   <main>
+    <section class="activity-section">
+      <h2>Live / recent Comfy</h2>
+      <div class="toolbar">
+        <button type="button" id="refresh-activity">Refresh</button>
+      </div>
+      <div class="activity" id="activity"><div class="empty">Loading activity…</div></div>
+    </section>
     <section>
       <h2>Cached outpaints</h2>
       <div class="toolbar">
@@ -225,6 +321,36 @@
         `status <strong>${j.status}</strong> · comfy ` +
         `<strong>${j.comfyui ? "up" : "down"}</strong> · cache ` +
         `<strong>${j.cache_items}</strong> / ${j.cache_max_items}`;
+    }
+
+    async function loadSettings() {
+      const r = await fetch(`/admin/api/settings${authQs}`);
+      if (!r.ok) throw new Error(await r.text());
+      const j = await r.json();
+      const box = document.getElementById("quality-gate");
+      const state = document.getElementById("quality-gate-state");
+      box.checked = !!j.flux_quality_gate;
+      state.textContent = box.checked ? "on" : "off";
+      state.className = box.checked ? "label-on" : "label-off";
+    }
+
+    async function setQualityGate(enabled) {
+      const r = await fetch(`/admin/api/settings${authQs}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ flux_quality_gate: enabled }),
+      });
+      if (!r.ok) {
+        alert("Failed to update quality gate: " + (await r.text()));
+        await loadSettings();
+        return;
+      }
+      const j = await r.json();
+      const box = document.getElementById("quality-gate");
+      const state = document.getElementById("quality-gate-state");
+      box.checked = !!j.flux_quality_gate;
+      state.textContent = box.checked ? "on" : "off";
+      state.className = box.checked ? "label-on" : "label-off";
     }
 
     async function loadEntries() {
@@ -309,14 +435,71 @@
         .replace(/>/g, "&gt;");
     }
 
+    function renderJob(j, { current }) {
+      const phaseClass = j.phase === "error" ? "phase error" : "phase";
+      const boxClass = current
+        ? "job current"
+        : (j.phase === "error" ? "job error" : "job");
+      const started = fmtTime(j.started_at);
+      const updated = fmtTime(j.updated_at);
+      return `
+        <div class="${boxClass}">
+          <div><span class="${phaseClass}">${escapeHtml(j.phase || "?")}</span>
+            <strong>${escapeHtml((j.hash || "").slice(0, 12))}…</strong>
+            ${current ? " · live" : " · recent"}</div>
+          <div class="row">request <strong>${j.src_w}×${j.src_h}</strong>
+            → <strong>${escapeHtml(j.out_size || "—")}</strong>
+            · pads <strong>${escapeHtml(j.pads || "—")}</strong>
+            · gate <strong>${j.quality_gate ? "on" : "off"}</strong></div>
+          <div class="row">comfy image <strong>${escapeHtml(j.comfy_image || "—")}</strong>
+            · prompt_id <strong>${escapeHtml(j.prompt_id || "—")}</strong>
+            · seed <strong>${j.seed ?? "—"}</strong></div>
+          <div class="row">output <strong>${escapeHtml(j.output_filename || "—")}</strong>
+            · started ${started} · updated ${updated}</div>
+          <div class="prompt">+ ${escapeHtml(j.positive_prompt || "(empty)")}</div>
+          <div class="prompt">− ${escapeHtml(j.negative_prompt || "(empty)")}</div>
+          ${j.error ? `<div class="row" style="color:var(--err)">error ${escapeHtml(j.error)}</div>` : ""}
+        </div>`;
+    }
+
+    async function loadActivity() {
+      const el = document.getElementById("activity");
+      try {
+        const r = await fetch(`/admin/api/activity${authQs}`);
+        if (!r.ok) throw new Error(await r.text());
+        const j = await r.json();
+        const current = j.current || [];
+        const recent = j.recent || [];
+        if (!current.length && !recent.length) {
+          el.innerHTML = '<div class="empty">No in-flight or recent Comfy jobs.</div>';
+          return;
+        }
+        el.innerHTML =
+          current.map((job) => renderJob(job, { current: true })).join("") +
+          recent.map((job) => renderJob(job, { current: false })).join("");
+      } catch (err) {
+        el.innerHTML = `<div class="empty">Failed to load: ${err.message}</div>`;
+      }
+    }
+
     async function refreshAll() {
-      await Promise.all([loadStatus(), loadEntries(), loadLogs()]);
+      await Promise.all([
+        loadStatus(),
+        loadSettings(),
+        loadActivity(),
+        loadEntries(),
+        loadLogs(),
+      ]);
     }
 
     document.getElementById("refresh-entries").onclick = loadEntries;
     document.getElementById("refresh-logs").onclick = loadLogs;
+    document.getElementById("refresh-activity").onclick = loadActivity;
+    document.getElementById("quality-gate").addEventListener("change", (ev) => {
+      setQualityGate(ev.target.checked);
+    });
     refreshAll();
-    setInterval(refreshAll, 8000);
+    setInterval(refreshAll, 3000);
   </script>
 </body>
 </html>

@@ -48,7 +48,9 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
         async def health(self) -> bool:
             return False
 
-        async def outpaint(self, source_bytes: bytes, *, layout=None) -> bytes | None:
+        async def outpaint(
+            self, source_bytes: bytes, *, layout=None, content_hash=None
+        ) -> bytes | None:
             return _fake_flux_jpeg(source_bytes, layout)
 
     with TestClient(app) as test_client:
@@ -98,6 +100,13 @@ def test_admin_page_and_apis(client: TestClient) -> None:
     assert page.status_code == 200
     assert "text/html" in page.headers["content-type"]
     assert "Cached outpaints" in page.text
+    assert "Live / recent Comfy" in page.text
+
+    activity = client.get("/admin/api/activity")
+    assert activity.status_code == 200
+    act = activity.json()
+    assert "current" in act and "recent" in act
+    assert any(j["hash"] == content_hash and j["phase"] == "done" for j in act["recent"])
 
     entries = client.get("/admin/api/entries")
     assert entries.status_code == 200
@@ -121,6 +130,19 @@ def test_admin_page_and_apis(client: TestClient) -> None:
     assert client.get(f"/admin/cache/{content_hash}.jpg").status_code == 404
     entries_after = client.get("/admin/api/entries").json()
     assert all(e["hash"] != content_hash for e in entries_after["entries"])
+
+    settings = client.get("/admin/api/settings")
+    assert settings.status_code == 200
+    assert settings.json()["flux_quality_gate"] is False
+    toggled = client.put(
+        "/admin/api/settings",
+        json={"flux_quality_gate": True},
+    )
+    assert toggled.status_code == 200
+    assert toggled.json()["flux_quality_gate"] is True
+    assert client.app.state.outpaint.flux_quality_gate is True
+    page = client.get("/admin")
+    assert "quality-gate" in page.text
 
 
 def test_admin_token_required(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

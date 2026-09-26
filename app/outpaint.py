@@ -6,6 +6,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
+from app.activity import ActivityTracker
 from app.cache import MediaCache
 from app.comfy_client import ComfyUiOutpaintClient
 from app.layout import OutpaintLayout
@@ -43,14 +44,21 @@ class OutpaintService:
         *,
         retry_after_s: int = 5,
         flux_quality_gate: bool = False,
+        activity: ActivityTracker | None = None,
     ) -> None:
         self.cache = cache
         self.comfy = comfy
         self.retry_after_s = max(1, retry_after_s)
-        self.flux_quality_gate = flux_quality_gate
+        self.flux_quality_gate = bool(flux_quality_gate)
+        self.activity = activity or ActivityTracker()
         self._inflight: dict[str, asyncio.Task[None]] = {}
         self._inflight_meta: dict[str, tuple[OutpaintLayout, int, int]] = {}
         self._lock = asyncio.Lock()
+
+    def set_flux_quality_gate(self, enabled: bool) -> bool:
+        self.flux_quality_gate = bool(enabled)
+        logger.info("Flux quality gate %s", "on" if self.flux_quality_gate else "off")
+        return self.flux_quality_gate
 
     def _hit_result(
         self,
@@ -97,6 +105,7 @@ class OutpaintService:
         task.cancel()
         self._inflight.pop(content_hash, None)
         self._inflight_meta.pop(content_hash, None)
+        self.activity.finish(content_hash, phase="error", error="cancelled")
         return True
 
     def _settled_flux_hit(
@@ -163,6 +172,14 @@ class OutpaintService:
             )
             self._inflight[content_hash] = task
             self._inflight_meta[content_hash] = (pads, src_w, src_h)
+            self.activity.start(
+                content_hash,
+                src_w=src_w,
+                src_h=src_h,
+                pads=pads.header_pad(),
+                out_size=pads.header_size(src_w, src_h),
+                quality_gate=self.flux_quality_gate,
+            )
             return GeneratingStatus(
                 hash=content_hash,
                 retry_after_s=self.retry_after_s,
@@ -232,10 +249,15 @@ class OutpaintService:
             await self._generate(
                 source_bytes, content_hash, layout=layout, src_w=src_w, src_h=src_h
             )
-        except Exception:
+            self.activity.finish(content_hash, phase="done")
+        except asyncio.CancelledError:
+            self.activity.finish(content_hash, phase="error", error="cancelled")
+            raise
+        except Exception as exc:
             logger.exception("Outpaint job failed for %s", content_hash[:12])
             # Prevent infinite Comfy re-queue on repeated playlist plays.
             self.cache.mark_done(content_hash)
+            self.activity.finish(content_hash, phase="error", error=str(exc))
         finally:
             async with self._lock:
                 current = self._inflight.get(content_hash)
@@ -258,10 +280,11 @@ class OutpaintService:
         if hit is not None:
             return hit
 
-        flux = await self.comfy.outpaint(source_bytes, layout=layout)
+        flux = await self.comfy.outpaint(source_bytes, layout=layout, content_hash=content_hash)
         if not flux:
             accepted = None
         elif self.flux_quality_gate:
+            self.activity.update(content_hash, phase="gating")
             accepted = accept_flux_pad(
                 flux,
                 source_bytes,
@@ -276,6 +299,7 @@ class OutpaintService:
             self.cache.mark_done(content_hash)
             if flux:
                 logger.info("Rejected Flux pad for %s", content_hash[:12])
+                self.activity.update(content_hash, error="quality gate rejected")
             raise RuntimeError("flux outpaint failed")
 
         stored = self.cache.put_by_hash(content_hash, accepted, source="flux")

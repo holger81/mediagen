@@ -48,7 +48,9 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
         async def health(self) -> bool:
             return False
 
-        async def outpaint(self, source_bytes: bytes, *, layout=None) -> bytes | None:
+        async def outpaint(
+            self, source_bytes: bytes, *, layout=None, content_hash=None
+        ) -> bytes | None:
             return _fake_flux_jpeg(source_bytes, layout)
 
     with TestClient(app) as test_client:
@@ -211,7 +213,9 @@ def test_outpaint_pictorial_returns_202_then_ready(client: TestClient) -> None:
         async def health(self) -> bool:
             return False
 
-        async def outpaint(self, source_bytes: bytes, *, layout=None) -> bytes | None:
+        async def outpaint(
+            self, source_bytes: bytes, *, layout=None, content_hash=None
+        ) -> bytes | None:
             await asyncio.sleep(0.3)
             return _fake_flux_jpeg(source_bytes, layout)
 
@@ -260,7 +264,9 @@ def test_flux_failure_does_not_store_local(client: TestClient) -> None:
         async def health(self) -> bool:
             return False
 
-        async def outpaint(self, source_bytes: bytes, *, layout=None) -> bytes | None:
+        async def outpaint(
+            self, source_bytes: bytes, *, layout=None, content_hash=None
+        ) -> bytes | None:
             await asyncio.sleep(0.05)
             return None
 

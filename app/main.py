@@ -10,6 +10,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
+from app.activity import ActivityTracker
 from app.admin import router as admin_router
 from app.cache import MediaCache
 from app.comfy_client import ComfyUiOutpaintClient, default_workflow_path
@@ -17,6 +18,7 @@ from app.config import Settings, get_settings
 from app.layout import parse_outpaint_layout, source_size
 from app.log_buffer import install_log_buffer
 from app.outpaint import GeneratingStatus, OutpaintResult, OutpaintService
+from app.runtime_settings import apply_runtime_overrides
 
 
 def _workflows_dir(settings: Settings) -> Path:
@@ -33,20 +35,25 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     install_log_buffer(capacity=settings.admin_log_capacity)
     cache = MediaCache(settings.cache_dir, max_items=settings.cache_max_items)
+    activity = ActivityTracker()
     comfy = ComfyUiOutpaintClient(
         base_url=settings.comfyui_base_url,
         workflow_path=default_workflow_path(_workflows_dir(settings)),
         poll_interval_s=settings.outpaint_poll_interval_s,
         poll_timeout_s=settings.outpaint_poll_timeout_s,
+        activity=activity,
     )
     app.state.settings = settings
     app.state.cache = cache
     app.state.comfy = comfy
+    app.state.activity = activity
+    gate = apply_runtime_overrides(settings.cache_dir, flux_quality_gate=settings.flux_quality_gate)
     app.state.outpaint = OutpaintService(
         cache,
         comfy,
         retry_after_s=settings.outpaint_retry_after_s,
-        flux_quality_gate=settings.flux_quality_gate,
+        flux_quality_gate=gate,
+        activity=activity,
     )
     try:
         yield

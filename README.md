@@ -20,7 +20,7 @@ Docker media-generation API. Starts with **image outpaint** (greatroom-wall Flux
 | `COMFYUI_BASE_URL` | `http://192.168.10.31:8188` | Existing ComfyUI HTTP API |
 | `OUTPAINT_POLL_TIMEOUT_S` | `180` | Max seconds to wait for Comfy Flux (cold load can exceed 90s) |
 | `OUTPAINT_RETRY_AFTER_S` | `5` | Suggested poll interval when status is `generating` |
-| `FLUX_QUALITY_GATE` | `0` | `1`/`true` enables Flux pad quality gate (reject invented mats / hard seams → `.done` only, later POST → 502). Default off keeps Comfy JPEG/SQLite even when checks fail |
+| `FLUX_QUALITY_GATE` | `0` | `1`/`true` enables Flux pad quality gate (reject invented mats / hard seams → `.done` only, later POST → 502). Default off; overridable in `/admin` |
 | `CORS_ORIGINS` | `*` | CORS allow list |
 | `ADMIN_TOKEN` | _(empty)_ | If set, `/admin` requires `?token=` or `X-Admin-Token` |
 | `ADMIN_LOG_CAPACITY` | `500` | In-memory log lines kept for the admin UI |
@@ -50,7 +50,11 @@ That error on `mediagen-api-1` almost always means the **host port is already ta
   - **Still generating:** `202` JSON
   - **Unknown / failed without image:** `404`
 - `GET /health` — API + Comfy reachability
-- `GET /admin` — browser UI: cached outpaint gallery + recent logs (optional `ADMIN_TOKEN`)
+- `GET /admin` — browser UI: live Comfy activity, cached outpaint gallery + recent logs (optional `ADMIN_TOKEN`)
+  - Quality-gate toggle in the header (persisted under `CACHE_DIR/mediagen_runtime.json`)
+  - Live / recent Comfy panel: request size/pads, phases, seed, prompts, prompt_id, Comfy image name
+  - `GET /admin/api/settings` / `PUT /admin/api/settings` — `{ "flux_quality_gate": true|false }`
+  - `GET /admin/api/activity` — `{ "current": [...], "recent": [...] }` in-flight + finished jobs
   - `GET /admin/api/entries` — JSON cache listing
   - `DELETE /admin/api/entries/{sha256}` — remove JPEG + markers (allows Flux retry)
   - `GET /admin/api/logs` — JSON recent log lines

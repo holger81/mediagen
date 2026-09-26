@@ -71,7 +71,9 @@ class CountingComfy(ComfyUiOutpaintClient):
         self.succeed = succeed
         self.flux_bytes = flux_bytes
 
-    async def outpaint(self, source_bytes: bytes, *, layout=None) -> bytes | None:
+    async def outpaint(
+        self, source_bytes: bytes, *, layout=None, content_hash=None
+    ) -> bytes | None:
         self.calls += 1
         await asyncio.sleep(0.05)
         if not self.succeed:

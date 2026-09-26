@@ -6,15 +6,21 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from pydantic import BaseModel, Field
 
 from app.cache import MediaCache
 from app.config import Settings
 from app.log_buffer import get_log_handler
 from app.outpaint import OutpaintService
+from app.runtime_settings import load_runtime_settings, save_runtime_settings
 
 router = APIRouter(tags=["admin"])
 
 _ADMIN_HTML = Path(__file__).resolve().parent / "static" / "admin.html"
+
+
+class AdminSettingsUpdate(BaseModel):
+    flux_quality_gate: bool | None = Field(default=None)
 
 
 def _check_admin(request: Request, token: str | None) -> None:
@@ -29,12 +35,57 @@ def _check_admin(request: Request, token: str | None) -> None:
         raise HTTPException(status_code=401, detail="admin auth required")
 
 
+def _settings_payload(request: Request) -> dict:
+    service: OutpaintService = request.app.state.outpaint
+    settings: Settings = request.app.state.settings
+    return {
+        "flux_quality_gate": service.flux_quality_gate,
+        "flux_quality_gate_env_default": settings.flux_quality_gate,
+    }
+
+
 @router.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request, token: str | None = Query(default=None)) -> HTMLResponse:
     _check_admin(request, token)
     if not _ADMIN_HTML.is_file():
         raise HTTPException(status_code=500, detail="admin page missing")
     return HTMLResponse(_ADMIN_HTML.read_text(encoding="utf-8"))
+
+
+@router.get("/admin/api/settings")
+async def admin_get_settings(
+    request: Request,
+    token: str | None = Query(default=None),
+) -> JSONResponse:
+    _check_admin(request, token)
+    return JSONResponse(_settings_payload(request))
+
+
+@router.put("/admin/api/settings")
+async def admin_put_settings(
+    request: Request,
+    body: AdminSettingsUpdate,
+    token: str | None = Query(default=None),
+) -> JSONResponse:
+    _check_admin(request, token)
+    service: OutpaintService = request.app.state.outpaint
+    cache: MediaCache = request.app.state.cache
+    if body.flux_quality_gate is not None:
+        service.set_flux_quality_gate(body.flux_quality_gate)
+        stored = load_runtime_settings(cache.cache_dir)
+        stored["flux_quality_gate"] = service.flux_quality_gate
+        save_runtime_settings(cache.cache_dir, stored)
+    return JSONResponse(_settings_payload(request))
+
+
+@router.get("/admin/api/activity")
+async def admin_activity(
+    request: Request,
+    token: str | None = Query(default=None),
+) -> JSONResponse:
+    _check_admin(request, token)
+    service: OutpaintService = request.app.state.outpaint
+    return JSONResponse(service.activity.snapshot())
 
 
 @router.get("/admin/api/entries")
