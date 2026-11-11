@@ -40,6 +40,10 @@ KLEIN_OUTPAINT_PROMPT = (
 # Bump when pad strategy / prompt / workflow / hash layout changes.
 OUTPAINT_CACHE_VERSION = "no-frame-prompt-v10"
 
+# Separate namespace for from-scratch generation (txt2img / img2img / refs);
+# no dashboard client-side hashing here, so it can evolve independently.
+GENERATE_CACHE_VERSION = "gen-v1"
+
 LOAD_IMAGE_NODE_ID = "17"
 POSITIVE_PROMPT_NODE_ID = "23"
 NEGATIVE_PROMPT_NODE_ID = "46"

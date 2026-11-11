@@ -34,6 +34,123 @@ GUIDE_IMAGE_NODE_ID = "54"
 
 KLEIN_WORKFLOW_FILENAME = "album_outpaint_klein_api.json"
 
+# Klein base checkpoints used for from-scratch generation (no outpaint LoRA).
+KLEIN_UNET = "flux3-image-klein-int8-convrot.safetensors"
+KLEIN_CLIP = "qwen3vl_4b_int8_convrot.safetensors"
+KLEIN_VAE = "flux2-vae.safetensors"
+
+
+def build_generate_graph(
+    prompt: str,
+    *,
+    source_name: str | None = None,
+    reference_names: list[str] | None = None,
+    width: int = 1024,
+    height: int = 1024,
+    denoise: float = 1.0,
+    seed: int | None = None,
+) -> dict[str, Any]:
+    """Build a Klein txt2img / img2img graph with optional reference images.
+
+    img2img (source_name set): LoadImage -> ImageScale -> VAEEncode feeds the
+    KSampler latent, and denoise < 1 keeps the structure (walls, windows) while
+    texture, materials and lighting get re-rendered. Reference images go through
+    ReferenceMultiLatent, which contributes conditioning plus a base latent for
+    pure txt2img; with a source image the encoded latent wins and the refs only
+    steer style/content. Klein is distilled for CFG 1, so the negative side is
+    ConditioningZeroOut (the negative branch is unused anyway).
+    """
+    if seed is None:
+        seed = random.randint(0, 2_147_483_647)
+    refs = [name for name in (reference_names or []) if name]
+    graph: dict[str, Any] = {
+        "31": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": KLEIN_UNET, "weight_dtype": "default"},
+        },
+        "34": {
+            "class_type": "CLIPLoader",
+            "inputs": {"clip_name": KLEIN_CLIP, "type": "flux3", "device": "default"},
+        },
+        "32": {"class_type": "VAELoader", "inputs": {"vae_name": KLEIN_VAE}},
+        "23": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["34", 0]}},
+        "46": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["23", 0]}},
+        "49": {
+            "class_type": "ModelSamplingFlux",
+            "inputs": {
+                "model": ["31", 0],
+                "max_shift": 2.77259,
+                "base_shift": 2.77259,
+                "width": width,
+                "height": height,
+            },
+        },
+    }
+    positive: list[Any] = ["23", 0]
+    negative: list[Any] = ["46", 0]
+    if refs:
+        for i, name in enumerate(refs):
+            graph[str(70 + i)] = {
+                "class_type": "LoadImage",
+                "inputs": {"image": name, "upload": "image"},
+            }
+        ref_inputs: dict[str, Any] = {
+            "positive": ["23", 0],
+            "negative": ["46", 0],
+            "resolution": "keep resolution",
+            "vae": ["32", 0],
+        }
+        for i in range(len(refs)):
+            # Dotted autogrow key required by ReferenceMultiLatent.
+            ref_inputs[f"images.image{i}"] = [str(70 + i), 0]
+        graph["48"] = {"class_type": "ReferenceMultiLatent", "inputs": ref_inputs}
+        positive = ["48", 0]
+        negative = ["48", 1]
+    if source_name:
+        graph["17"] = {
+            "class_type": "LoadImage",
+            "inputs": {"image": source_name, "upload": "image"},
+        }
+        graph["57"] = {
+            "class_type": "ImageScale",
+            "inputs": {
+                "image": ["17", 0],
+                "upscale_method": "lanczos",
+                "width": width,
+                "height": height,
+                "crop": "disabled",
+            },
+        }
+        graph["45"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["57", 0], "vae": ["32", 0]}}
+        latent: list[Any] = ["45", 0]
+    else:
+        graph["58"] = {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": width, "height": height, "batch_size": 1},
+        }
+        latent = ["48", 2] if refs else ["58", 0]
+    graph["3"] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "model": ["49", 0],
+            "seed": seed,
+            "steps": 16,
+            "cfg": 1.0,
+            "sampler_name": "euler",
+            "scheduler": "simple",
+            "denoise": denoise,
+            "positive": positive,
+            "negative": negative,
+            "latent_image": latent,
+        },
+    }
+    graph["8"] = {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["32", 0]}}
+    graph["9"] = {
+        "class_type": "SaveImage",
+        "inputs": {"images": ["8", 0], "filename_prefix": "mediagen_gen"},
+    }
+    return graph
+
 
 def build_guide_bytes(source_bytes: bytes, layout: OutpaintLayout) -> bytes | None:
     """Compose the canvas-sized reference guide for the Klein outpaint LoRA.
@@ -252,6 +369,81 @@ class ComfyUiOutpaintClient:
             output_filename=view.get("filename"),
         )
         return await self._download_view(view)
+
+    async def generate(
+        self,
+        prompt: str,
+        *,
+        source_bytes: bytes | None = None,
+        reference_bytes: list[bytes] | None = None,
+        width: int = 1024,
+        height: int = 1024,
+        denoise: float = 1.0,
+        seed: int | None = None,
+        content_hash: str | None = None,
+    ) -> bytes | None:
+        """txt2img / img2img render on the Klein base graph (no outpaint LoRA)."""
+        if not self.base_url:
+            return None
+        tag = (content_hash or uuid.uuid4().hex)[:12]
+        self._note(content_hash, phase="uploading")
+        source_name: str | None = None
+        if source_bytes:
+            source_name = await self._upload_image(source_bytes, f"gen_source_{tag}.png")
+            if source_name is None:
+                self._note(content_hash, phase="error", error="comfy source upload failed")
+                return None
+        ref_names: list[str] = []
+        for i, blob in enumerate(reference_bytes or []):
+            name = await self._upload_image(blob, f"gen_ref{i}_{tag}.png")
+            if name is None:
+                self._note(content_hash, phase="error", error="comfy reference upload failed")
+                return None
+            ref_names.append(name)
+        graph = build_generate_graph(
+            prompt,
+            source_name=source_name,
+            reference_names=ref_names,
+            width=width,
+            height=height,
+            denoise=denoise,
+            seed=seed,
+        )
+        self._note(
+            content_hash,
+            phase="prompt",
+            seed=graph["3"]["inputs"]["seed"],
+            out_size=f"{width}x{height}",
+            denoise=denoise,
+            refs=len(ref_names),
+        )
+        prompt_id = await self._queue_graph(graph)
+        if prompt_id is None:
+            self._note(content_hash, phase="error", error="comfy prompt failed")
+            return None
+        self._note(content_hash, phase="waiting", prompt_id=prompt_id)
+        view = await self._wait_for_output(prompt_id)
+        if view is None:
+            self._note(content_hash, phase="error", error="comfy poll timeout")
+            return None
+        self._note(content_hash, phase="downloading", output_filename=view.get("filename"))
+        return await self._download_view(view)
+
+    async def _queue_graph(self, graph: dict[str, Any]) -> str | None:
+        """Queue a programmatically built graph (generate path)."""
+        try:
+            client_id = str(uuid.uuid4())
+            resp = await self._http().post(
+                f"{self.base_url}/prompt", json={"prompt": graph, "client_id": client_id}
+            )
+            if not resp.is_success:
+                logger.warning("Comfy prompt failed: %s %s", resp.status_code, resp.text[:400])
+                return None
+            prompt_id = str(resp.json().get("prompt_id") or "").strip()
+            return prompt_id or None
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning("Comfy prompt error: %s", exc)
+            return None
 
     async def _maybe_upload_guide(
         self,
