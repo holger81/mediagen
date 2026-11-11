@@ -44,12 +44,15 @@ class OutpaintService:
         *,
         retry_after_s: int = 5,
         flux_quality_gate: bool = False,
+        done_stale_after_s: float = 1800.0,
         activity: ActivityTracker | None = None,
     ) -> None:
         self.cache = cache
         self.comfy = comfy
         self.retry_after_s = max(1, retry_after_s)
         self.flux_quality_gate = bool(flux_quality_gate)
+        # Failure markers older than this are retried instead of refused forever.
+        self.done_stale_after_s = max(60.0, float(done_stale_after_s))
         self.activity = activity or ActivityTracker()
         self._inflight: dict[str, asyncio.Task[None]] = {}
         self._inflight_meta: dict[str, tuple[OutpaintLayout, int, int]] = {}
@@ -145,8 +148,18 @@ class OutpaintService:
         if hit is not None:
             return hit
 
-        # Prior Flux attempt finished without a usable image — do not spam Comfy.
-        if self.cache.is_done(content_hash):
+        # Consumed (tombstoned) entry for the same content — serve stored bytes
+        # instead of paying for another render.
+        if self.cache.revive_tombstone(content_hash):
+            hit = self._settled_flux_hit(
+                content_hash, touch=True, layout=pads, src_w=src_w, src_h=src_h
+            )
+            if hit is not None:
+                return hit
+
+        # Prior Flux attempt finished without a usable image — do not spam Comfy,
+        # but let stale failure markers expire so transient failures self-heal.
+        if self.cache.is_done(content_hash, stale_after_s=self.done_stale_after_s):
             raise RuntimeError("flux outpaint failed")
 
         async with self._lock:
@@ -155,7 +168,7 @@ class OutpaintService:
             )
             if hit is not None:
                 return hit
-            if self.cache.is_done(content_hash):
+            if self.cache.is_done(content_hash, stale_after_s=self.done_stale_after_s):
                 raise RuntimeError("flux outpaint failed")
             if self.is_generating(content_hash):
                 return GeneratingStatus(

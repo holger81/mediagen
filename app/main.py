@@ -15,10 +15,11 @@ from app.admin import router as admin_router
 from app.cache import MediaCache
 from app.comfy_client import ComfyUiOutpaintClient, default_workflow_path
 from app.config import Settings, get_settings
+from app.constants import OUTPAINT_CACHE_VERSION
 from app.layout import parse_outpaint_layout, source_size
 from app.log_buffer import install_log_buffer
 from app.outpaint import GeneratingStatus, OutpaintResult, OutpaintService
-from app.runtime_settings import apply_runtime_overrides
+from app.runtime_settings import apply_runtime_overrides, load_runtime_settings
 
 
 def _workflows_dir(settings: Settings) -> Path:
@@ -34,11 +35,19 @@ def _workflows_dir(settings: Settings) -> Path:
 async def lifespan(app: FastAPI):
     settings = get_settings()
     install_log_buffer(capacity=settings.admin_log_capacity)
-    cache = MediaCache(settings.cache_dir, max_items=settings.cache_max_items)
+    # Outpaint model switch (flux | klein) via persisted runtime setting.
+    # cache_version must stay exactly OUTPAINT_CACHE_VERSION for every model:
+    # the dashboard computes expected hashes client-side with that string, so a
+    # model-specific suffix makes its GETs miss and re-POST (duplicate renders).
+    outpaint_model = str(load_runtime_settings(settings.cache_dir).get("outpaint_model", "flux")).lower()
+    cache_version = OUTPAINT_CACHE_VERSION
+    cache = MediaCache(
+        settings.cache_dir, max_items=settings.cache_max_items, cache_version=cache_version
+    )
     activity = ActivityTracker()
     comfy = ComfyUiOutpaintClient(
         base_url=settings.comfyui_base_url,
-        workflow_path=default_workflow_path(_workflows_dir(settings)),
+        workflow_path=default_workflow_path(_workflows_dir(settings), model=outpaint_model),
         poll_interval_s=settings.outpaint_poll_interval_s,
         poll_timeout_s=settings.outpaint_poll_timeout_s,
         activity=activity,

@@ -153,6 +153,7 @@ async def admin_delete_entry(
     sha256: str,
     request: Request,
     token: str | None = Query(default=None),
+    hard: bool = Query(default=False),
 ) -> JSONResponse:
     _check_admin(request, token)
     digest = sha256.lower()
@@ -161,7 +162,10 @@ async def admin_delete_entry(
     cache: MediaCache = request.app.state.cache
     service: OutpaintService = request.app.state.outpaint
     service.cancel_inflight(digest)
-    removed = cache.invalidate(digest)
+    # Default is a soft delete (tombstone): the dashboard consumes entries and
+    # re-POSTs them, and a tombstoned hash is revived without a fresh render.
+    # ?hard=true removes the bytes too (force a genuine re-render).
+    removed = cache.tombstone(digest) if not hard else cache.invalidate(digest)
     # Also clear a lone .done / .pads / .flux if the JPEG was already gone.
     if not removed:
         cache.done_marker_for(digest).unlink(missing_ok=True)

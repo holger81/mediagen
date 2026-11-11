@@ -106,6 +106,9 @@ class MediaCache:
     def pads_marker_for(self, content_hash: str) -> Path:
         return self.cache_dir / f"{content_hash}.pads"
 
+    def tombstone_marker_for(self, content_hash: str) -> Path:
+        return self.cache_dir / f"{content_hash}.tomb"
+
     def write_layout(self, content_hash: str, layout: OutpaintLayout) -> None:
         with self._lock:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -134,8 +137,25 @@ class MediaCache:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             self.done_marker_for(content_hash).touch()
 
-    def is_done(self, content_hash: str) -> bool:
-        return self.done_marker_for(content_hash).is_file()
+    def is_done(self, content_hash: str, *, stale_after_s: float | None = None) -> bool:
+        """True when a finished attempt marker exists.
+
+        With stale_after_s, markers older than that are treated as stale
+        failures (e.g. from a broken pipeline or a transient ComfyUI outage):
+        they are removed and False is returned so the content can be retried.
+        """
+        marker = self.done_marker_for(content_hash)
+        if not marker.is_file():
+            return False
+        if stale_after_s is not None:
+            try:
+                age = time.time() - marker.stat().st_mtime
+            except OSError:
+                return False
+            if age > stale_after_s:
+                marker.unlink(missing_ok=True)
+                return False
+        return True
 
     def get(
         self,
@@ -158,6 +178,9 @@ class MediaCache:
                     (content_hash,),
                 ).fetchone()
                 if row is None:
+                    # Tombstoned bytes stay hidden until a re-POST revives them.
+                    if self.tombstone_marker_for(content_hash).is_file():
+                        return None
                     # Orphan file — register as flux with 1 hit (legacy unknowns).
                     now = time.time()
                     conn.execute(
@@ -262,6 +285,65 @@ class MediaCache:
             self.done_marker_for(content_hash).unlink(missing_ok=True)
             self.pads_marker_for(content_hash).unlink(missing_ok=True)
             return removed
+
+    def tombstone(self, content_hash: str) -> bool:
+        """Soft-delete: hide an entry from lookups but keep its JPEG bytes.
+
+        The dashboard consumes entries (GET → fetch → DELETE) and re-POSTs the
+        same cover on its next cycle. Keeping the content-addressed bytes lets
+        submit() revive the entry instantly instead of re-rendering it. Hard
+        deletes (LRU eviction, non-flux drops, ?hard admin purge) still use
+        invalidate().
+        """
+        path = self.file_for(content_hash)
+        with self._lock:
+            with self._connect() as conn:
+                conn.execute("DELETE FROM entries WHERE hash = ?", (content_hash,))
+            existed = path.is_file() and path.stat().st_size > 0
+            self.done_marker_for(content_hash).unlink(missing_ok=True)
+            if existed:
+                self.tombstone_marker_for(content_hash).touch()
+            else:
+                self.pads_marker_for(content_hash).unlink(missing_ok=True)
+                (self.cache_dir / f"{content_hash}.flux").unlink(missing_ok=True)
+            self._prune_tombstones()
+            return existed
+
+    def revive_tombstone(self, content_hash: str) -> bool:
+        """Re-register a tombstoned entry when its JPEG bytes are still on disk."""
+        path = self.file_for(content_hash)
+        tomb = self.tombstone_marker_for(content_hash)
+        with self._lock:
+            if not tomb.is_file():
+                return False
+            if not path.is_file() or path.stat().st_size <= 0:
+                tomb.unlink(missing_ok=True)
+                return False
+            now = time.time()
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO entries
+                    (hash, media_type, operation, source, hits, last_access, created_at)
+                    VALUES (?, ?, ?, ?, 1, ?, ?)
+                    """,
+                    (content_hash, self.media_type, self.operation, "flux", now, now),
+                )
+            tomb.unlink(missing_ok=True)
+            self.done_marker_for(content_hash).touch()
+            return True
+
+    def _prune_tombstones(self) -> None:
+        """Bound tombstoned JPEGs so repeated consume cycles cannot fill the disk."""
+        tombs = sorted(
+            self.cache_dir.glob("*.tomb"),
+            key=lambda p: p.stat().st_mtime if p.exists() else 0.0,
+        )
+        for tomb in tombs[: max(0, len(tombs) - self.max_items)]:
+            digest = tomb.name[: -len(".tomb")]
+            tomb.unlink(missing_ok=True)
+            self.file_for(digest).unlink(missing_ok=True)
+            self.pads_marker_for(digest).unlink(missing_ok=True)
 
     def count(self) -> int:
         with self._lock, self._connect() as conn:

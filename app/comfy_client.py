@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import io
 import logging
 import random
 import uuid
@@ -11,6 +12,7 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
+from PIL import Image, ImageFilter
 
 from app.constants import (
     LOAD_IMAGE_NODE_ID,
@@ -23,6 +25,64 @@ from app.constants import (
 from app.layout import OutpaintLayout
 
 logger = logging.getLogger(__name__)
+
+
+# Klein template wires a second LoadImage (node 54) that receives a
+# canvas-sized "guide" image used only as reference conditioning.
+GUIDE_IMAGE_NODE_ID = "54"
+
+
+def build_guide_bytes(source_bytes: bytes, layout: OutpaintLayout) -> bytes | None:
+    """Compose the canvas-sized reference guide for Klein outpaint.
+
+    The border band is an edge-replicated, blurred continuation of the cover
+    at 1:1 scale, with the untouched cover pasted at the pad offset. This
+    anchors the reference latents at the final canvas scale without suggesting
+    a zoomed copy of the cover (a scaled mid-layer makes the model repaint the
+    border as an enlarged duplicate). Canvas size matches what the graph
+    actually renders: ImagePadForOutpaint output truncated to multiples of 16
+    by the Flux VAE.
+    """
+    try:
+        img = Image.open(io.BytesIO(source_bytes))
+        img.load()
+        img = img.convert("RGB")
+    except OSError:
+        return None
+    w, h = img.size
+    pad_l, pad_t, pad_r, pad_b = layout.as_tuple()
+    cw = (w + pad_l + pad_r) // 16 * 16
+    ch = (h + pad_t + pad_b) // 16 * 16
+    if cw < 16 or ch < 16:
+        return None
+    canvas = Image.new("RGB", (cw, ch))
+    if pad_l:
+        canvas.paste(img.crop((0, 0, 1, h)).resize((pad_l, h)), (0, pad_t))
+    if pad_r:
+        canvas.paste(img.crop((w - 1, 0, w, h)).resize((pad_r, h)), (w + pad_l, pad_t))
+    if pad_t:
+        canvas.paste(img.crop((0, 0, w, 1)).resize((w, pad_t)), (pad_l, 0))
+    if pad_b:
+        canvas.paste(img.crop((0, h - 1, w, h)).resize((w, pad_b)), (pad_l, pad_t + h))
+    blurred = canvas.filter(ImageFilter.GaussianBlur(16))
+    # Corners have no replicated neighbour; take them from the blurred copy.
+    if pad_l and pad_t:
+        canvas.paste(blurred.crop((0, 0, pad_l, pad_t)), (0, 0))
+    if pad_r and pad_t:
+        canvas.paste(blurred.crop((w + pad_l, 0, cw, pad_t)), (w + pad_l, 0))
+    if pad_l and pad_b:
+        canvas.paste(blurred.crop((0, pad_t + h, pad_l, ch)), (0, pad_t + h))
+    if pad_r and pad_b:
+        canvas.paste(blurred.crop((w + pad_l, pad_t + h, cw, ch)), (w + pad_l, pad_t + h))
+    # Blur the border band so smeared edge structure reads as depth, not detail.
+    canvas.paste(blurred.crop((0, 0, cw, pad_t)), (0, 0))
+    canvas.paste(blurred.crop((0, pad_t + h, cw, ch)), (0, pad_t + h))
+    canvas.paste(blurred.crop((0, pad_t, pad_l, pad_t + h)), (0, pad_t))
+    canvas.paste(blurred.crop((w + pad_l, pad_t, cw, pad_t + h)), (w + pad_l, pad_t))
+    canvas.paste(img, (pad_l, pad_t))
+    buf = io.BytesIO()
+    canvas.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def _workflow_seed(workflow: dict[str, Any]) -> int | None:
@@ -41,6 +101,7 @@ def prepare_workflow(
     seed: int | None = None,
     *,
     layout: OutpaintLayout | None = None,
+    guide_name: str | None = None,
 ) -> dict[str, Any]:
     """Rewrite LoadImage, pads, positive/negative CLIP prompts, and a fresh seed."""
     if seed is None:
@@ -60,9 +121,15 @@ def prepare_workflow(
         class_type = node.get("class_type")
         inputs = dict(node.get("inputs") or {})
         if class_type == "LoadImage":
-            inputs["image"] = image_name
-            node["inputs"] = inputs
-            wrote_image = True
+            if key == GUIDE_IMAGE_NODE_ID:
+                # Klein reference-guide slot; keep template name when no guide built.
+                if guide_name:
+                    inputs["image"] = guide_name
+                    node["inputs"] = inputs
+            else:
+                inputs["image"] = image_name
+                node["inputs"] = inputs
+                wrote_image = True
         elif class_type == "CLIPTextEncode" and key == POSITIVE_PROMPT_NODE_ID:
             inputs["text"] = positive_prompt
             node["inputs"] = inputs
@@ -79,6 +146,12 @@ def prepare_workflow(
             inputs["top"] = pads.pad_top
             inputs["right"] = pads.pad_right
             inputs["bottom"] = pads.pad_bottom
+            node["inputs"] = inputs
+        elif class_type == "ImageCompositeMasked":
+            # Klein keep-center paste-back: the untouched cover goes back at
+            # the pad offset so it lands exactly where the canvas expects it.
+            inputs["x"] = pads.pad_left
+            inputs["y"] = pads.pad_top
             node["inputs"] = inputs
         result[key] = node
 
@@ -170,13 +243,19 @@ class ComfyUiOutpaintClient:
     ) -> bytes | None:
         if not self.base_url or not source_bytes:
             return None
+        # Unique per-cover names: concurrent requests must not overwrite each
+        # other's upload while a render is still reading the file.
+        tag = (content_hash or uuid.uuid4().hex)[:12]
         self._note(content_hash, phase="uploading")
-        uploaded = await self._upload_image(source_bytes)
+        uploaded = await self._upload_image(source_bytes, f"album_cover_{tag}.png")
         if uploaded is None:
             self._note(content_hash, phase="error", error="comfy upload failed")
             return None
+        guide_name = await self._maybe_upload_guide(source_bytes, layout, uploaded, tag)
         self._note(content_hash, phase="prompt", comfy_image=uploaded)
-        prompt_id = await self._queue_prompt(uploaded, layout=layout, content_hash=content_hash)
+        prompt_id = await self._queue_prompt(
+            uploaded, layout=layout, content_hash=content_hash, guide_name=guide_name
+        )
         if prompt_id is None:
             self._note(content_hash, phase="error", error="comfy prompt failed")
             return None
@@ -192,9 +271,34 @@ class ComfyUiOutpaintClient:
         )
         return await self._download_view(view)
 
-    async def _upload_image(self, source_bytes: bytes) -> str | None:
+    async def _maybe_upload_guide(
+        self,
+        source_bytes: bytes,
+        layout: OutpaintLayout | None,
+        fallback_name: str,
+        tag: str,
+    ) -> str | None:
+        """Build and upload the canvas-sized reference guide for Klein graphs.
+
+        Returns the guide image name, or the plain cover name when the template
+        has no guide slot or the guide could not be built (older Fill graphs).
+        """
+        if GUIDE_IMAGE_NODE_ID not in self._load_workflow():
+            return None
+        pads = layout if layout is not None else OutpaintLayout.defaults()
+        guide_bytes = build_guide_bytes(source_bytes, pads)
+        if guide_bytes is None:
+            logger.warning("guide build failed, falling back to cover reference")
+            return fallback_name
+        name = await self._upload_image(guide_bytes, f"album_guide_{tag}.png")
+        if name is None:
+            logger.warning("guide upload failed, falling back to cover reference")
+            return fallback_name
+        return name
+
+    async def _upload_image(self, source_bytes: bytes, filename: str = "album_cover.png") -> str | None:
         try:
-            files = {"image": ("album_cover.png", source_bytes, "application/octet-stream")}
+            files = {"image": (filename, source_bytes, "application/octet-stream")}
             data = {"type": "input", "overwrite": "true"}
             resp = await self._http().post(f"{self.base_url}/upload/image", files=files, data=data)
             if not resp.is_success:
@@ -216,10 +320,16 @@ class ComfyUiOutpaintClient:
         *,
         layout: OutpaintLayout | None = None,
         content_hash: str | None = None,
+        guide_name: str | None = None,
     ) -> str | None:
         try:
             client_id = str(uuid.uuid4())
-            workflow = prepare_workflow(self._load_workflow(), image_name=image_name, layout=layout)
+            workflow = prepare_workflow(
+                self._load_workflow(),
+                image_name=image_name,
+                layout=layout,
+                guide_name=guide_name,
+            )
             pads = layout if layout is not None else OutpaintLayout.defaults()
             self._note(
                 content_hash,
@@ -297,5 +407,10 @@ class ComfyUiOutpaintClient:
             return None
 
 
-def default_workflow_path(workflows_dir: Path) -> Path:
+KLEIN_WORKFLOW_FILENAME = "album_outpaint_klein_api.json"
+
+
+def default_workflow_path(workflows_dir: Path, model: str = "flux") -> Path:
+    if model == "klein":
+        return workflows_dir / KLEIN_WORKFLOW_FILENAME
     return workflows_dir / WORKFLOW_FILENAME

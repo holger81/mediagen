@@ -1,0 +1,238 @@
+{
+ "17": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "PLACEHOLDER_COVER.png",
+   "upload": "image"
+  }
+ },
+ "31": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "flux3-image-klein-int8-convrot.safetensors",
+   "weight_dtype": "default"
+  }
+ },
+ "34": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen3vl_4b_int8_convrot.safetensors",
+   "type": "flux3",
+   "device": "default"
+  }
+ },
+ "32": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "flux2-vae.safetensors"
+  }
+ },
+ "23": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "text": "PLACEHOLDER_OUTPAINT_PROMPT",
+   "clip": [
+    "34",
+    0
+   ]
+  }
+ },
+ "46": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "text": "PLACEHOLDER_NEGATIVE_PROMPT",
+   "clip": [
+    "34",
+    0
+   ]
+  }
+ },
+ "48": {
+  "class_type": "ReferenceMultiLatent",
+  "inputs": {
+   "positive": [
+    "23",
+    0
+   ],
+   "negative": [
+    "46",
+    0
+   ],
+   "resolution": "keep resolution",
+   "vae": [
+    "32",
+    0
+   ],
+   "images.image0": [
+    "54",
+    0
+   ]
+  }
+ },
+ "44": {
+  "class_type": "ImagePadForOutpaint",
+  "inputs": {
+   "image": [
+    "17",
+    0
+   ],
+   "left": 256,
+   "top": 128,
+   "right": 256,
+   "bottom": 128,
+   "feathering": 0
+  }
+ },
+ "45": {
+  "class_type": "VAEEncode",
+  "inputs": {
+   "pixels": [
+    "44",
+    0
+   ],
+   "vae": [
+    "32",
+    0
+   ]
+  }
+ },
+ "47": {
+  "class_type": "SetLatentNoiseMask",
+  "inputs": {
+   "samples": [
+    "45",
+    0
+   ],
+   "mask": [
+    "44",
+    1
+   ]
+  }
+ },
+ "49": {
+  "class_type": "ModelSamplingFlux",
+  "inputs": {
+   "model": [
+    "31",
+    0
+   ],
+   "max_shift": 2.77259,
+   "base_shift": 2.77259,
+   "width": 1024,
+   "height": 1024
+  }
+ },
+ "3": {
+  "class_type": "KSampler",
+  "inputs": {
+   "model": [
+    "49",
+    0
+   ],
+   "seed": 0,
+   "steps": 16,
+   "cfg": 1.0,
+   "sampler_name": "euler",
+   "scheduler": "simple",
+   "positive": [
+    "48",
+    0
+   ],
+   "negative": [
+    "48",
+    1
+   ],
+   "latent_image": [
+    "47",
+    0
+   ],
+   "denoise": 1.0
+  }
+ },
+ "8": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "3",
+    0
+   ],
+   "vae": [
+    "32",
+    0
+   ]
+  }
+ },
+ "50": {
+  "class_type": "SolidMask",
+  "inputs": {
+   "value": 1.0,
+   "width": [
+    "53",
+    0
+   ],
+   "height": [
+    "53",
+    1
+   ]
+  }
+ },
+ "51": {
+  "class_type": "FeatherMask",
+  "inputs": {
+   "mask": [
+    "50",
+    0
+   ],
+   "left": 32,
+   "top": 32,
+   "right": 32,
+   "bottom": 32
+  }
+ },
+ "52": {
+  "class_type": "ImageCompositeMasked",
+  "inputs": {
+   "destination": [
+    "8",
+    0
+   ],
+   "source": [
+    "17",
+    0
+   ],
+   "x": 256,
+   "y": 128,
+   "resize_source": false,
+   "mask": [
+    "51",
+    0
+   ]
+  }
+ },
+ "9": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "52",
+    0
+   ],
+   "filename_prefix": "mediagen_pad_klein"
+  }
+ },
+ "53": {
+  "class_type": "GetImageSize",
+  "inputs": {
+   "image": [
+    "17",
+    0
+   ]
+  }
+ },
+ "54": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "album_guide.png",
+   "upload": "image"
+  }
+ }
+}
