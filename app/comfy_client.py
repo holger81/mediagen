@@ -12,9 +12,10 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
-from PIL import Image, ImageFilter
+from PIL import Image
 
 from app.constants import (
+    KLEIN_OUTPAINT_PROMPT,
     LOAD_IMAGE_NODE_ID,
     NEGATIVE_PROMPT_NODE_ID,
     OUTPAINT_NEGATIVE_PROMPT,
@@ -31,17 +32,19 @@ logger = logging.getLogger(__name__)
 # canvas-sized "guide" image used only as reference conditioning.
 GUIDE_IMAGE_NODE_ID = "54"
 
+KLEIN_WORKFLOW_FILENAME = "album_outpaint_klein_api.json"
+
 
 def build_guide_bytes(source_bytes: bytes, layout: OutpaintLayout) -> bytes | None:
-    """Compose the canvas-sized reference guide for Klein outpaint.
+    """Compose the canvas-sized reference guide for the Klein outpaint LoRA.
 
-    The border band is an edge-replicated, blurred continuation of the cover
-    at 1:1 scale, with the untouched cover pasted at the pad offset. This
-    anchors the reference latents at the final canvas scale without suggesting
-    a zoomed copy of the cover (a scaled mid-layer makes the model repaint the
-    border as an enlarged duplicate). Canvas size matches what the graph
-    actually renders: ImagePadForOutpaint output truncated to multiples of 16
-    by the Flux VAE.
+    Flat gray #808080 canvas with the untouched cover pasted at the pad offset
+    (1:1 scale). This is the exact recipe the AusBoss FLUX 3 Klein outpaint LoRA
+    was trained on: the model is told to replace the solid gray with a scene
+    continuation, so anything richer (edge replication, blur, scaled copies)
+    makes it repaint the border as an enlarged duplicate of the cover. Canvas
+    size matches what the graph renders: cover + pads truncated to multiples
+    of 16 by the Flux VAE.
     """
     try:
         img = Image.open(io.BytesIO(source_bytes))
@@ -55,30 +58,7 @@ def build_guide_bytes(source_bytes: bytes, layout: OutpaintLayout) -> bytes | No
     ch = (h + pad_t + pad_b) // 16 * 16
     if cw < 16 or ch < 16:
         return None
-    canvas = Image.new("RGB", (cw, ch))
-    if pad_l:
-        canvas.paste(img.crop((0, 0, 1, h)).resize((pad_l, h)), (0, pad_t))
-    if pad_r:
-        canvas.paste(img.crop((w - 1, 0, w, h)).resize((pad_r, h)), (w + pad_l, pad_t))
-    if pad_t:
-        canvas.paste(img.crop((0, 0, w, 1)).resize((w, pad_t)), (pad_l, 0))
-    if pad_b:
-        canvas.paste(img.crop((0, h - 1, w, h)).resize((w, pad_b)), (pad_l, pad_t + h))
-    blurred = canvas.filter(ImageFilter.GaussianBlur(16))
-    # Corners have no replicated neighbour; take them from the blurred copy.
-    if pad_l and pad_t:
-        canvas.paste(blurred.crop((0, 0, pad_l, pad_t)), (0, 0))
-    if pad_r and pad_t:
-        canvas.paste(blurred.crop((w + pad_l, 0, cw, pad_t)), (w + pad_l, 0))
-    if pad_l and pad_b:
-        canvas.paste(blurred.crop((0, pad_t + h, pad_l, ch)), (0, pad_t + h))
-    if pad_r and pad_b:
-        canvas.paste(blurred.crop((w + pad_l, pad_t + h, cw, ch)), (w + pad_l, pad_t + h))
-    # Blur the border band so smeared edge structure reads as depth, not detail.
-    canvas.paste(blurred.crop((0, 0, cw, pad_t)), (0, 0))
-    canvas.paste(blurred.crop((0, pad_t + h, cw, ch)), (0, pad_t + h))
-    canvas.paste(blurred.crop((0, pad_t, pad_l, pad_t + h)), (0, pad_t))
-    canvas.paste(blurred.crop((w + pad_l, pad_t, cw, pad_t + h)), (w + pad_l, pad_t))
+    canvas = Image.new("RGB", (cw, ch), (128, 128, 128))
     canvas.paste(img, (pad_l, pad_t))
     buf = io.BytesIO()
     canvas.save(buf, format="PNG")
@@ -171,12 +151,12 @@ def prepare_workflow(
             result[POSITIVE_PROMPT_NODE_ID] = node
     if not wrote_negative and NEGATIVE_PROMPT_NODE_ID in result:
         node = result[NEGATIVE_PROMPT_NODE_ID]
-        if isinstance(node, dict):
+        # Only rewrite real prompt nodes; the Klein template keeps node 46 as
+        # ConditioningZeroOut (LoRA recipe), which must stay untouched.
+        if isinstance(node, dict) and node.get("class_type") == "CLIPTextEncode":
             inputs = dict(node.get("inputs") or {})
             inputs["text"] = negative_prompt
-            # Ensure CLIPTextEncode shape if an old ConditioningZeroOut template sneaks in.
-            inputs.setdefault("clip", ["34", 0])
-            node = {**node, "class_type": "CLIPTextEncode", "inputs": inputs}
+            node = {**node, "inputs": inputs}
             result[NEGATIVE_PROMPT_NODE_ID] = node
     return result
 
@@ -200,6 +180,8 @@ class ComfyUiOutpaintClient:
         self._owns_client = client is None
         self._workflow_template: dict[str, Any] | None = None
         self.activity = activity
+        # Klein + LoRA graphs use the trigger prompt and a zeroed negative.
+        self._is_klein = workflow_path.name == KLEIN_WORKFLOW_FILENAME
 
     def _note(self, content_hash: str | None, **kwargs: Any) -> None:
         if self.activity is None or not content_hash:
@@ -324,9 +306,18 @@ class ComfyUiOutpaintClient:
     ) -> str | None:
         try:
             client_id = str(uuid.uuid4())
+            if self._is_klein:
+                positive_prompt = KLEIN_OUTPAINT_PROMPT
+                # Negative side is ConditioningZeroOut in the Klein graph.
+                negative_prompt = ""
+            else:
+                positive_prompt = OUTPAINT_PROMPT
+                negative_prompt = OUTPAINT_NEGATIVE_PROMPT
             workflow = prepare_workflow(
                 self._load_workflow(),
                 image_name=image_name,
+                positive_prompt=positive_prompt,
+                negative_prompt=negative_prompt,
                 layout=layout,
                 guide_name=guide_name,
             )
@@ -335,8 +326,8 @@ class ComfyUiOutpaintClient:
                 content_hash,
                 comfy_image=image_name,
                 seed=_workflow_seed(workflow),
-                positive_prompt=OUTPAINT_PROMPT,
-                negative_prompt=OUTPAINT_NEGATIVE_PROMPT,
+                positive_prompt=positive_prompt,
+                negative_prompt=negative_prompt,
                 client_id=client_id,
                 pads=pads.header_pad(),
             )
@@ -405,9 +396,6 @@ class ComfyUiOutpaintClient:
         except httpx.HTTPError as exc:
             logger.warning("Comfy view download error: %s", exc)
             return None
-
-
-KLEIN_WORKFLOW_FILENAME = "album_outpaint_klein_api.json"
 
 
 def default_workflow_path(workflows_dir: Path, model: str = "flux") -> Path:

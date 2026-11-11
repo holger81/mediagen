@@ -6,6 +6,13 @@
    "upload": "image"
   }
  },
+ "54": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "album_guide.png",
+   "upload": "image"
+  }
+ },
  "31": {
   "class_type": "UNETLoader",
   "inputs": {
@@ -21,6 +28,22 @@
    "device": "default"
   }
  },
+ "60": {
+  "class_type": "LoraLoader",
+  "inputs": {
+   "model": [
+    "31",
+    0
+   ],
+   "clip": [
+    "34",
+    0
+   ],
+   "lora_name": "flux-3-image-klein-outpaint.safetensors",
+   "strength_model": 1.5,
+   "strength_clip": 1.0
+  }
+ },
  "32": {
   "class_type": "VAELoader",
   "inputs": {
@@ -32,17 +55,16 @@
   "inputs": {
    "text": "PLACEHOLDER_OUTPAINT_PROMPT",
    "clip": [
-    "34",
-    0
+    "60",
+    1
    ]
   }
  },
  "46": {
-  "class_type": "CLIPTextEncode",
+  "class_type": "ConditioningZeroOut",
   "inputs": {
-   "text": "PLACEHOLDER_NEGATIVE_PROMPT",
-   "clip": [
-    "34",
+   "conditioning": [
+    "23",
     0
    ]
   }
@@ -69,51 +91,11 @@
    ]
   }
  },
- "44": {
-  "class_type": "ImagePadForOutpaint",
-  "inputs": {
-   "image": [
-    "17",
-    0
-   ],
-   "left": 256,
-   "top": 128,
-   "right": 256,
-   "bottom": 128,
-   "feathering": 0
-  }
- },
- "45": {
-  "class_type": "VAEEncode",
-  "inputs": {
-   "pixels": [
-    "44",
-    0
-   ],
-   "vae": [
-    "32",
-    0
-   ]
-  }
- },
- "47": {
-  "class_type": "SetLatentNoiseMask",
-  "inputs": {
-   "samples": [
-    "45",
-    0
-   ],
-   "mask": [
-    "44",
-    1
-   ]
-  }
- },
  "49": {
   "class_type": "ModelSamplingFlux",
   "inputs": {
    "model": [
-    "31",
+    "60",
     0
    ],
    "max_shift": 2.77259,
@@ -134,6 +116,7 @@
    "cfg": 1.0,
    "sampler_name": "euler",
    "scheduler": "simple",
+   "denoise": 1.0,
    "positive": [
     "48",
     0
@@ -143,10 +126,9 @@
     1
    ],
    "latent_image": [
-    "47",
-    0
-   ],
-   "denoise": 1.0
+    "48",
+    2
+   ]
   }
  },
  "8": {
@@ -158,6 +140,15 @@
    ],
    "vae": [
     "32",
+    0
+   ]
+  }
+ },
+ "53": {
+  "class_type": "GetImageSize",
+  "inputs": {
+   "image": [
+    "17",
     0
    ]
   }
@@ -217,22 +208,6 @@
     0
    ],
    "filename_prefix": "mediagen_pad_klein"
-  }
- },
- "53": {
-  "class_type": "GetImageSize",
-  "inputs": {
-   "image": [
-    "17",
-    0
-   ]
-  }
- },
- "54": {
-  "class_type": "LoadImage",
-  "inputs": {
-   "image": "album_guide.png",
-   "upload": "image"
   }
  }
 }

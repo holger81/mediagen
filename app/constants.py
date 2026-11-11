@@ -29,6 +29,14 @@ OUTPAINT_NEGATIVE_PROMPT = (
     "white margin, cream paper edge, rounded photo corners, postcard"
 )
 
+# Klein + AusBoss outpaint LoRA: the trigger sentence is what the LoRA was
+# trained with; the gray-padded reference canvas carries the spatial anchor, so
+# no scene description is needed and the negative side is ConditioningZeroOut.
+KLEIN_OUTPAINT_PROMPT = (
+    "Outpaint the image: replace the solid gray areas with a seamless "
+    "continuation of the scene, keeping the existing picture unchanged."
+)
+
 # Bump when pad strategy / prompt / workflow / hash layout changes.
 OUTPAINT_CACHE_VERSION = "no-frame-prompt-v10"
 

@@ -59,3 +59,71 @@ def test_prepare_workflow_injects_no_text_prompts() -> None:
 def test_workflow_template_has_negative_clip_encode() -> None:
     assert WORKFLOW["46"]["class_type"] == "CLIPTextEncode"
     assert WORKFLOW["46"]["inputs"]["clip"] == ["34", 0]
+
+
+KLEIN_WORKFLOW = json.loads(
+    (ROOT / "workflows" / "album_outpaint_klein_api.json").read_text()
+)
+
+
+def test_klein_template_is_lora_reference_graph() -> None:
+    """Klein graph must be the AusBoss LoRA recipe, not the old pad/mask graph."""
+    assert KLEIN_WORKFLOW["60"]["class_type"] == "LoraLoader"
+    assert KLEIN_WORKFLOW["60"]["inputs"]["lora_name"] == (
+        "flux-3-image-klein-outpaint.safetensors"
+    )
+    assert KLEIN_WORKFLOW["60"]["inputs"]["strength_model"] == 1.5
+    # Negative side is zeroed conditioning, never a text encode.
+    assert KLEIN_WORKFLOW["46"]["class_type"] == "ConditioningZeroOut"
+    # KSampler samples a fresh latent from ReferenceMultiLatent (no noise mask,
+    # no VAEEncode of a padded cover: denoise 1.0 with a reference canvas).
+    assert KLEIN_WORKFLOW["3"]["inputs"]["latent_image"] == ["48", 2]
+    assert KLEIN_WORKFLOW["3"]["inputs"]["denoise"] == 1.0
+    classes = {node["class_type"] for node in KLEIN_WORKFLOW.values()}
+    assert "SetLatentNoiseMask" not in classes
+    assert "ImagePadForOutpaint" not in classes
+    assert "VAEEncode" not in classes
+
+
+def test_prepare_workflow_klein_writes_guide_and_pads() -> None:
+    from app.constants import KLEIN_OUTPAINT_PROMPT
+    from app.layout import OutpaintLayout
+
+    layout = OutpaintLayout(pad_left=162, pad_top=12, pad_right=162, pad_bottom=192)
+    prepared = prepare_workflow(
+        KLEIN_WORKFLOW,
+        image_name="cover.png",
+        positive_prompt=KLEIN_OUTPAINT_PROMPT,
+        negative_prompt="",
+        seed=7,
+        layout=layout,
+        guide_name="guide.png",
+    )
+    assert prepared["17"]["inputs"]["image"] == "cover.png"
+    assert prepared["54"]["inputs"]["image"] == "guide.png"
+    assert prepared["23"]["inputs"]["text"] == KLEIN_OUTPAINT_PROMPT
+    # The ConditioningZeroOut negative must survive untouched.
+    assert prepared["46"]["class_type"] == "ConditioningZeroOut"
+    assert "text" not in prepared["46"]["inputs"]
+    assert prepared["3"]["inputs"]["seed"] == 7
+    assert prepared["52"]["inputs"]["x"] == 162
+    assert prepared["52"]["inputs"]["y"] == 12
+
+
+def test_build_guide_bytes_gray_canvas() -> None:
+    import io
+
+    from PIL import Image
+
+    from app.comfy_client import build_guide_bytes
+    from app.layout import OutpaintLayout
+
+    cover = Image.new("RGB", (100, 80), (10, 200, 30))
+    buf = io.BytesIO()
+    cover.save(buf, format="PNG")
+    layout = OutpaintLayout(pad_left=50, pad_top=10, pad_right=50, pad_bottom=30)
+    out = Image.open(io.BytesIO(build_guide_bytes(buf.getvalue(), layout)))
+    # 100+100=200 -> 192, 80+40=120 -> 112 (multiples of 16).
+    assert out.size == (192, 112)
+    assert out.getpixel((5, 5)) == (128, 128, 128)  # gray border band
+    assert out.getpixel((50 + 50, 10 + 40)) == (10, 200, 30)  # cover at offset
