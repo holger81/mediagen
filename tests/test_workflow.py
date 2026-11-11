@@ -113,10 +113,9 @@ def test_prepare_workflow_klein_writes_guide_and_pads() -> None:
 def test_build_guide_bytes_gray_canvas() -> None:
     import io
 
-    from PIL import Image
-
     from app.comfy_client import build_guide_bytes
     from app.layout import OutpaintLayout
+    from PIL import Image
 
     cover = Image.new("RGB", (100, 80), (10, 200, 30))
     buf = io.BytesIO()

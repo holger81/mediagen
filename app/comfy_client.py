@@ -278,7 +278,9 @@ class ComfyUiOutpaintClient:
             return fallback_name
         return name
 
-    async def _upload_image(self, source_bytes: bytes, filename: str = "album_cover.png") -> str | None:
+    async def _upload_image(
+        self, source_bytes: bytes, filename: str = "album_cover.png"
+    ) -> str | None:
         try:
             files = {"image": (filename, source_bytes, "application/octet-stream")}
             data = {"type": "input", "overwrite": "true"}

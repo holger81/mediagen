@@ -39,7 +39,9 @@ async def lifespan(app: FastAPI):
     # cache_version must stay exactly OUTPAINT_CACHE_VERSION for every model:
     # the dashboard computes expected hashes client-side with that string, so a
     # model-specific suffix makes its GETs miss and re-POST (duplicate renders).
-    outpaint_model = str(load_runtime_settings(settings.cache_dir).get("outpaint_model", "flux")).lower()
+    outpaint_model = str(
+        load_runtime_settings(settings.cache_dir).get("outpaint_model", "flux")
+    ).lower()
     cache_version = OUTPAINT_CACHE_VERSION
     cache = MediaCache(
         settings.cache_dir, max_items=settings.cache_max_items, cache_version=cache_version
