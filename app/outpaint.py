@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from app.activity import ActivityTracker
 from app.cache import MediaCache
-from app.comfy_client import ComfyUiOutpaintClient
+from app.comfy_client import ComfyUiOutpaintClient, fit_to_canvas_bytes
 from app.layout import OutpaintLayout
 from app.local_pad import accept_flux_pad
 
@@ -294,6 +294,9 @@ class OutpaintService:
             return hit
 
         flux = await self.comfy.outpaint(source_bytes, layout=layout, content_hash=content_hash)
+        if flux:
+            # VAE truncates the render to multiples of 16; restore the exact canvas.
+            flux = fit_to_canvas_bytes(flux, layout, src_w, src_h)
         if not flux:
             accepted = None
         elif self.flux_quality_gate:

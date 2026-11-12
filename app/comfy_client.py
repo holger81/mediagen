@@ -15,6 +15,7 @@ import httpx
 from PIL import Image
 
 from app.constants import (
+    JPEG_QUALITY,
     KLEIN_OUTPAINT_PROMPT,
     LOAD_IMAGE_NODE_ID,
     NEGATIVE_PROMPT_NODE_ID,
@@ -179,6 +180,44 @@ def build_guide_bytes(source_bytes: bytes, layout: OutpaintLayout) -> bytes | No
     canvas.paste(img, (pad_l, pad_t))
     buf = io.BytesIO()
     canvas.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def fit_to_canvas_bytes(
+    image_bytes: bytes, layout: OutpaintLayout, src_w: int, src_h: int
+) -> bytes:
+    """Stretch Flux output back to the exact requested canvas size.
+
+    The Flux VAE renders the canvas truncated to multiples of 16 (520 -> 512);
+    clients that compare the returned image against their widget geometry
+    (ha_native_dash) reject anything but an exact match. Only correct plain
+    truncation (<=16 px per axis); anything further off is served unchanged.
+    """
+    target_w = src_w + layout.pad_left + layout.pad_right
+    target_h = src_h + layout.pad_top + layout.pad_bottom
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        img.load()
+    except (OSError, ValueError):
+        return image_bytes
+    if img.size == (target_w, target_h):
+        img.close()
+        return image_bytes
+    if abs(target_w - img.width) > 16 or abs(target_h - img.height) > 16:
+        logger.warning(
+            "flux output %dx%d too far from canvas %dx%d; serving as-is",
+            img.width,
+            img.height,
+            target_w,
+            target_h,
+        )
+        img.close()
+        return image_bytes
+    resized = img.convert("RGB").resize((target_w, target_h), Image.LANCZOS)
+    buf = io.BytesIO()
+    resized.save(buf, format="JPEG", quality=JPEG_QUALITY)
+    img.close()
+    resized.close()
     return buf.getvalue()
 
 
